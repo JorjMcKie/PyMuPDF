@@ -73,6 +73,7 @@ class _SwigNonDynamicMeta(type):
     __setattr__ = _swig_setattr_nondynamic_class_variable(type.__setattr__)
 
 
+import binascii
 import hashlib
 import io
 import math
@@ -103,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.13"
-VersionDate = "2021-04-16 15:39:43"
-version = (VersionBind, VersionFitz, "20210416153943")
+VersionDate = "2021-04-25 10:25:45"
+version = (VersionBind, VersionFitz, "20210425102545")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -3859,7 +3860,16 @@ class Document(object):
         """
         idx = self._embeddedFileIndex(item)
         infodict = {"name": self.embfile_names()[idx]}
-        self._embfile_info(idx, infodict)
+        xref = self._embfile_info(idx, infodict)
+        t, date = self.xref_get_key(xref, "Params/CreationDate")
+        if t != "null":
+            infodict["creationDate"] = date
+        t, date = self.xref_get_key(xref, "Params/ModDate")
+        if t != "null":
+            infodict["modDate"] = date
+        t, md5 = self.xref_get_key(xref, "Params/CheckSum")
+        if t != "null":
+            infodict["checksum"] = binascii.hexlify(md5.encode()).decode()
         return infodict
 
     def embfile_get(self, item: typing.Union[int, str]) -> bytes:
@@ -3894,9 +3904,12 @@ class Document(object):
             desc: (str) the new description.
         """
         idx = self._embeddedFileIndex(item)
-        return self._embfile_upd(
+        xref = self._embfile_upd(
             idx, buffer=buffer, filename=filename, ufilename=ufilename, desc=desc
         )
+        date = getPDFnow()
+        self.xref_set_key(xref, "Params/ModDate", getPDFstr(date))
+        return xref
 
     def embfile_add(
         self,
@@ -3916,7 +3929,7 @@ class Document(object):
             desc: (str) the description.
         """
         filenames = self.embfile_names()
-        msg = "Name '%s' already in EmbeddedFiles array." % str(name)
+        msg = "Name '%s' already exists." % str(name)
         if name in filenames:
             raise ValueError(msg)
 
@@ -3926,9 +3939,14 @@ class Document(object):
             ufilename = unicode(filename, "utf8") if str is bytes else filename
         if desc is None:
             desc = name
-        return self._embfile_add(
+        xref = self._embfile_add(
             name, buffer=buffer, filename=filename, ufilename=ufilename, desc=desc
         )
+        date = getPDFnow()
+        self.xref_set_key(xref, "Type", "/EmbeddedFile")
+        self.xref_set_key(xref, "Params/CreationDate", getPDFstr(date))
+        self.xref_set_key(xref, "Params/ModDate", getPDFstr(date))
+        return xref
 
     def convert_to_pdf(
         self, from_page: int = 0, to_page: int = -1, rotate: int = 0
@@ -3938,20 +3956,6 @@ class Document(object):
             raise ValueError("document closed or encrypted")
 
         return _fitz.Document_convert_to_pdf(self, from_page, to_page, rotate)
-
-    def get_oc(self, xref: int) -> AnyType:
-        """Get xref of optional content object."""
-        if self.is_closed:
-            raise ValueError("document closed")
-
-        return _fitz.Document_get_oc(self, xref)
-
-    def set_oc(self, xref: int, oc: int) -> AnyType:
-        """Attach optional content object to image or form xobject."""
-        if self.is_closed:
-            raise ValueError("document closed")
-
-        return _fitz.Document_set_oc(self, xref, oc)
 
     @property
     def page_count(self) -> AnyType:

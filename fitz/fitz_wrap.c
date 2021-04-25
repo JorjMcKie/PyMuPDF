@@ -2730,10 +2730,6 @@ static swig_module_info swig_module = {swig_types, 15, 0, 0, 0, 0};
 
 // memory allocation macros
 #define JM_MEMORY 1
-#if  PY_MAJOR_VERSION < 3
-    #undef JM_MEMORY
-    #define JM_MEMORY 0
-#endif
 
 #if JM_MEMORY == 1
     #define JM_Alloc(type, len) PyMem_New(type, len)
@@ -2753,16 +2749,9 @@ static swig_module_info swig_module = {swig_types, 15, 0, 0, 0, 0};
 
 #define JM_PyErr_Clear if (PyErr_Occurred()) PyErr_Clear()
 
-// binary and char outputs depend on Python major
-# if PY_MAJOR_VERSION >= 3
-    #define JM_StrAsChar(x) (char *)PyUnicode_AsUTF8(x)
-    #define JM_BinFromChar(x) PyBytes_FromString(x)
-    #define JM_BinFromCharSize(x, y) PyBytes_FromStringAndSize(x, (Py_ssize_t) y)
-# else
-    #define JM_StrAsChar(x) (char *)PyString_AsString(x)
-    #define JM_BinFromChar(x) PyByteArray_FromStringAndSize(x, (Py_ssize_t) strlen(x))
-    #define JM_BinFromCharSize(x, y) PyByteArray_FromStringAndSize(x, (Py_ssize_t) y)
-# endif
+#define JM_StrAsChar(x) (char *)PyUnicode_AsUTF8(x)
+#define JM_BinFromChar(x) PyBytes_FromString(x)
+#define JM_BinFromCharSize(x, y) PyBytes_FromStringAndSize(x, (Py_ssize_t) y)
 
 #include <fitz.h>
 #include <pdf.h>
@@ -3475,14 +3464,11 @@ JM_quad_from_py(PyObject *r)
 // PySequence from fz_quad.
 //-----------------------------------------------------------------------------
 static PyObject *
-JM_py_from_quad(fz_quad quad)
+JM_py_from_quad(fz_quad q)
 {
-    PyObject *pquad = PyTuple_New(4);
-    PyTuple_SET_ITEM(pquad, 0, JM_py_from_point(quad.ul));
-    PyTuple_SET_ITEM(pquad, 1, JM_py_from_point(quad.ur));
-    PyTuple_SET_ITEM(pquad, 2, JM_py_from_point(quad.ll));
-    PyTuple_SET_ITEM(pquad, 3, JM_py_from_point(quad.lr));
-    return pquad;
+    return Py_BuildValue("((f,f),(f,f),(f,f),(f,f))",
+                          q.ul.x, q.ul.y, q.ur.x, q.ur.y,
+                          q.ll.x, q.ll.y, q.lr.x, q.lr.y);
 }
 
 
@@ -3958,7 +3944,7 @@ void JM_update_stream(fz_context *ctx, pdf_document *doc, pdf_obj *obj, fz_buffe
     size_t len = fz_buffer_storage(ctx, buffer, NULL);
     size_t nlen = len;
 
-    if (len > 30) {  // ignore small stuff
+    if (compress == 1 && len > 30) {  // ignore small stuff
         nres = JM_compress_buffer(ctx, buffer);
         nlen = fz_buffer_storage(ctx, nres, NULL);
     }
@@ -7684,12 +7670,11 @@ int JM_insert_contents(fz_context * ctx, pdf_document * pdf,
 static PyObject *img_info = NULL;
 
 static fz_image *
-JM_image_filter(fz_context * ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image)
+JM_image_filter(fz_context *ctx, void *opaque, fz_matrix ctm, const char *name, fz_image *image)
 {
     fz_quad q = fz_transform_quad(fz_quad_from_rect(fz_unit_rect), ctm);
-    PyObject *q_py = JM_py_from_quad(q);
-    PyList_Append(img_info, Py_BuildValue("sO", name, q_py));
-    Py_DECREF(q_py);
+    PyObject *temp = Py_BuildValue("sN", name, JM_py_from_quad(q));
+    LIST_APPEND_DROP(img_info, temp);
     return NULL;
 }
 
@@ -7775,8 +7760,7 @@ JM_image_reporter(fz_context *ctx, pdf_page *page)
     fz_drop_buffer(ctx, buffer);
     pdf_drop_obj(ctx, new_res);
     PyObject *rc = PySequence_Tuple(img_info);
-    Py_DECREF(img_info);
-    img_info = NULL;
+    Py_CLEAR(img_info);
     return rc;
 }
 
@@ -8199,19 +8183,17 @@ int JM_gather_images(fz_context *ctx, pdf_document *doc, pdf_obj *dict,
 
         int xref = pdf_to_num(ctx, imagedict);
         int gen = 0;
-        smask = pdf_dict_get(ctx, imagedict, PDF_NAME(SMask));
+        smask = pdf_dict_geta(ctx, imagedict, PDF_NAME(SMask), PDF_NAME(Mask));
         if (smask)
             gen = pdf_to_num(ctx, smask);
-        smask = pdf_dict_get(ctx, imagedict, PDF_NAME(Mask));
-        if (smask)
-            gen = pdf_to_num(ctx, smask);
-        filter = pdf_dict_get(ctx, imagedict, PDF_NAME(Filter));
+
+        filter = pdf_dict_geta(ctx, imagedict, PDF_NAME(Filter), PDF_NAME(F));
         if (pdf_is_array(ctx, filter)) {
             filter = pdf_array_get(ctx, filter, 0);
         }
 
         altcs = NULL;
-        cs = pdf_dict_get(ctx, imagedict, PDF_NAME(ColorSpace));
+        cs = pdf_dict_geta(ctx, imagedict, PDF_NAME(ColorSpace), PDF_NAME(CS));
         if (pdf_is_array(ctx, cs)) {
             pdf_obj *cses = cs;
             cs = pdf_array_get(ctx, cses, 0);
@@ -8223,9 +8205,9 @@ int JM_gather_images(fz_context *ctx, pdf_document *doc, pdf_obj *dict,
             }
         }
 
-        width = pdf_dict_get(ctx, imagedict, PDF_NAME(Width));
-        height = pdf_dict_get(ctx, imagedict, PDF_NAME(Height));
-        bpc = pdf_dict_get(ctx, imagedict, PDF_NAME(BitsPerComponent));
+        width = pdf_dict_geta(ctx, imagedict, PDF_NAME(Width), PDF_NAME(W));
+        height = pdf_dict_geta(ctx, imagedict, PDF_NAME(Height), PDF_NAME(H));
+        bpc = pdf_dict_geta(ctx, imagedict, PDF_NAME(BitsPerComponent), PDF_NAME(BPC));
 
         PyObject *entry = PyTuple_New(10);
         PyTuple_SET_ITEM(entry, 0, Py_BuildValue("i", xref));
@@ -9313,12 +9295,14 @@ SWIGINTERN PyObject *Document_xref_get_key(struct Document *self,int xref,char c
                 char *type;
                 if (pdf_is_indirect(gctx, subobj)) {
                     type = "xref";
+                    text = PyUnicode_FromFormat("%i 0 R", pdf_to_num(gctx, subobj));
                 } else if (pdf_is_array(gctx, subobj)) {
                     type = "array";
                 } else if (pdf_is_dict(gctx, subobj)) {
                     type = "dict";
                 } else if (pdf_is_int(gctx, subobj)) {
                     type = "int";
+                    text = PyUnicode_FromFormat("%i", pdf_to_int(gctx, subobj));
                 } else if (pdf_is_real(gctx, subobj)) {
                     type = "float";
                 } else if (pdf_is_null(gctx, subobj)) {
@@ -9326,8 +9310,14 @@ SWIGINTERN PyObject *Document_xref_get_key(struct Document *self,int xref,char c
                     text = PyUnicode_FromString("null");
                 } else if (pdf_is_bool(gctx, subobj)) {
                     type = "bool";
+                    if (pdf_to_bool(gctx, subobj)) {
+                        text = PyUnicode_FromString("true");
+                    } else {
+                        text = PyUnicode_FromString("false");
+                    }
                 } else if (pdf_is_name(gctx, subobj)) {
                     type = "name";
+                    text = PyUnicode_FromFormat("/%s", pdf_to_name(gctx, subobj));
                 } else if (pdf_is_string(gctx, subobj)) {
                     type = "string";
                     text = JM_UnicodeFromStr(pdf_to_text_string(gctx, subobj));
@@ -9539,6 +9529,7 @@ SWIGINTERN PyObject *Document__embfile_info(struct Document *self,int idx,PyObje
             fz_document *doc = (fz_document *) self;
             pdf_document *pdf = pdf_document_from_fz_document(gctx, doc);
             char *name;
+            int xref = 0, ci_xref=0;
             fz_try(gctx) {
                 pdf_obj *names = pdf_dict_getl(gctx, pdf_trailer(gctx, pdf),
                                       PDF_NAME(Root),
@@ -9548,7 +9539,11 @@ SWIGINTERN PyObject *Document__embfile_info(struct Document *self,int idx,PyObje
                                       NULL);
 
                 pdf_obj *o = pdf_array_get(gctx, names, 2*idx+1);
-
+                pdf_obj *ci = pdf_dict_get(gctx, o, PDF_NAME(CI));
+                if (ci) {
+                    ci_xref = pdf_to_num(gctx, ci);
+                }
+                DICT_SETITEMSTR_DROP(infodict, "collection", Py_BuildValue("i", ci_xref));
                 name = (char *) pdf_to_text_string(gctx,
                                           pdf_dict_get(gctx, o, PDF_NAME(F)));
                 DICT_SETITEM_DROP(infodict, dictkey_filename, JM_EscapeStrFromStr(name));
@@ -9562,16 +9557,16 @@ SWIGINTERN PyObject *Document__embfile_info(struct Document *self,int idx,PyObje
                 DICT_SETITEM_DROP(infodict, dictkey_desc, JM_UnicodeFromStr(name));
 
                 int len = -1, DL = -1;
-                pdf_obj *ef = pdf_dict_get(gctx, o, PDF_NAME(EF));
-                o = pdf_dict_getl(gctx, ef, PDF_NAME(F),
-                                            PDF_NAME(Length), NULL);
+                pdf_obj *fileentry = pdf_dict_getl(gctx, o, PDF_NAME(EF), PDF_NAME(F), NULL);
+                xref = pdf_to_num(gctx, fileentry);
+                o = pdf_dict_get(gctx, fileentry, PDF_NAME(Length));
                 if (o) len = pdf_to_int(gctx, o);
 
-                o = pdf_dict_getl(gctx, ef, PDF_NAME(F), PDF_NAME(DL), NULL);
+                o = pdf_dict_get(gctx, fileentry, PDF_NAME(DL));
                 if (o) {
                     DL = pdf_to_int(gctx, o);
                 } else {
-                    o = pdf_dict_getl(gctx, ef, PDF_NAME(F), PDF_NAME(Params),
+                    o = pdf_dict_getl(gctx, fileentry, PDF_NAME(Params),
                                    PDF_NAME(Size), NULL);
                     if (o) DL = pdf_to_int(gctx, o);
                 }
@@ -9581,13 +9576,14 @@ SWIGINTERN PyObject *Document__embfile_info(struct Document *self,int idx,PyObje
             fz_catch(gctx) {
                 return NULL;
             }
-            Py_RETURN_NONE;
+            return Py_BuildValue("i", xref);
         }
 SWIGINTERN PyObject *Document__embfile_upd(struct Document *self,int idx,PyObject *buffer,char *filename,char *ufilename,char *desc){
             fz_document *doc = (fz_document *) self;
             pdf_document *pdf = pdf_document_from_fz_document(gctx, doc);
             fz_buffer *res = NULL;
             fz_var(res);
+            int xref = 0;
             fz_try(gctx) {
                 pdf_obj *names = pdf_dict_getl(gctx, pdf_trailer(gctx, pdf),
                                       PDF_NAME(Root),
@@ -9601,7 +9597,6 @@ SWIGINTERN PyObject *Document__embfile_upd(struct Document *self,int idx,PyObjec
                 pdf_obj *filespec = pdf_dict_getl(gctx, entry, PDF_NAME(EF),
                                                   PDF_NAME(F), NULL);
                 if (!filespec) THROWMSG(gctx, "bad PDF: /EF object not found");
-
                 res = JM_BufferFromBytes(gctx, buffer);
                 if (EXISTS(buffer) && !res) THROWMSG(gctx, "bad type: 'buffer'");
                 if (res)
@@ -9613,7 +9608,7 @@ SWIGINTERN PyObject *Document__embfile_upd(struct Document *self,int idx,PyObjec
                     pdf_dict_put(gctx, filespec, PDF_NAME(DL), l);
                     pdf_dict_putl(gctx, filespec, l, PDF_NAME(Params), PDF_NAME(Size), NULL);
                 }
-
+                xref = pdf_to_num(gctx, filespec);
                 if (filename)
                     pdf_dict_put_text_string(gctx, entry, PDF_NAME(F), filename);
 
@@ -9629,7 +9624,7 @@ SWIGINTERN PyObject *Document__embfile_upd(struct Document *self,int idx,PyObjec
             fz_catch(gctx)
                 return NULL;
             pdf->dirty = 1;
-            Py_RETURN_NONE;
+            return Py_BuildValue("i", xref);
         }
 SWIGINTERN PyObject *Document__embeddedFileGet(struct Document *self,int idx){
             fz_document *doc = (fz_document *) self;
@@ -9668,6 +9663,7 @@ SWIGINTERN PyObject *Document__embfile_add(struct Document *self,char const *nam
             int entry = 0;
             size_t size = 0;
             pdf_obj *names = NULL;
+            int xref = 0; // xref of file entry
             fz_try(gctx) {
                 ASSERT_PDF(pdf);
                 data = JM_BufferFromBytes(gctx, buffer);
@@ -9695,6 +9691,8 @@ SWIGINTERN PyObject *Document__embfile_add(struct Document *self,char const *nam
                                                    filename,
                                                    ufilename,
                                                    desc, 1);
+                xref = pdf_to_num(gctx, pdf_dict_getl(gctx, fileentry,
+                                    PDF_NAME(EF), PDF_NAME(F), NULL));
                 pdf_array_push(gctx, names, pdf_new_text_string(gctx, name));
                 pdf_array_push_drop(gctx, names, fileentry);
             }
@@ -9705,7 +9703,7 @@ SWIGINTERN PyObject *Document__embfile_add(struct Document *self,char const *nam
                 return NULL;
             }
             pdf->dirty = 1;
-            Py_RETURN_NONE;
+            return Py_BuildValue("i", xref);
         }
 SWIGINTERN PyObject *Document_convert_to_pdf(struct Document *self,int from_page,int to_page,int rotate){
             PyObject *doc = NULL;
@@ -9722,74 +9720,6 @@ SWIGINTERN PyObject *Document_convert_to_pdf(struct Document *self,int from_page
                 return NULL;
             }
             return doc;
-        }
-SWIGINTERN PyObject *Document_get_oc(struct Document *self,int xref){
-            PyObject *ret = NULL;
-            pdf_obj *ind = NULL;
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
-            fz_try(gctx) {
-                ASSERT_PDF(pdf);
-                ind = pdf_new_indirect(gctx, pdf, xref, 0);
-                pdf_obj *type = pdf_dict_get(gctx, ind, PDF_NAME(Type));
-                if (pdf_objcmp(gctx, type, PDF_NAME(XObject)) != 0) {
-                    THROWMSG(gctx, "bad xref type");
-                }
-                type = pdf_dict_get(gctx, ind, PDF_NAME(Subtype));
-                if (pdf_objcmp(gctx, type, PDF_NAME(Image)) != 0 &&
-                    pdf_objcmp(gctx, type, PDF_NAME(Form)) != 0) {
-                    THROWMSG(gctx, "bad xref type");
-                }
-                pdf_obj *oc = pdf_dict_get(gctx, ind, PDF_NAME(OC));
-                if (!oc) {
-                    ret = Py_BuildValue("i", 0);
-                } else {
-                    ret = Py_BuildValue("i", pdf_to_num(gctx, oc));
-                }
-            }
-            fz_always(gctx) {
-                pdf_drop_obj(gctx, ind);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            return ret;
-        }
-SWIGINTERN PyObject *Document_set_oc(struct Document *self,int xref,int oc){
-            pdf_obj *ind = NULL, *indoc = NULL;
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
-            fz_try(gctx) {
-                ASSERT_PDF(pdf);
-                ind = pdf_new_indirect(gctx, pdf, xref, 0);
-                pdf_obj *type = pdf_dict_get(gctx, ind, PDF_NAME(Type));
-                if (pdf_objcmp(gctx, type, PDF_NAME(XObject)) != 0) {
-                    THROWMSG(gctx, "bad xref type");
-                }
-                type = pdf_dict_get(gctx, ind, PDF_NAME(Subtype));
-                if (pdf_objcmp(gctx, type, PDF_NAME(Image)) != 0 &&
-                    pdf_objcmp(gctx, type, PDF_NAME(Form)) != 0) {
-                    THROWMSG(gctx, "bad xref type");
-                }
-                if (!oc) {
-                    pdf_dict_del(gctx, ind, PDF_NAME(OC));
-                } else {
-                    indoc = pdf_new_indirect(gctx, pdf, oc, 0);
-                    type = pdf_dict_get(gctx, indoc, PDF_NAME(Type));
-                    if (pdf_objcmp(gctx, type, PDF_NAME(OCG)) == 0 ||
-                        pdf_objcmp(gctx, type, PDF_NAME(OCMD)) == 0) {
-                        pdf_dict_put(gctx, ind, PDF_NAME(OC), indoc);
-                    } else {
-                        THROWMSG(gctx, "bad 'oc' type");
-                    }
-                }
-            }
-            fz_always(gctx) {
-                pdf_drop_obj(gctx, ind);
-                pdf_drop_obj(gctx, indoc);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            Py_RETURN_NONE;
         }
 SWIGINTERN PyObject *Document_page_count(struct Document *self){
             PyObject *ret;
@@ -10535,11 +10465,9 @@ SWIGINTERN PyObject *Document_extract_image(struct Document *self,int xref){
                 if (!pdf_name_eq(gctx, subtype, PDF_NAME(Image)))
                     THROWMSG(gctx, "not an image");
 
-                pdf_obj *o = pdf_dict_get(gctx, obj, PDF_NAME(SMask));
+                pdf_obj *o = pdf_dict_geta(gctx, obj, PDF_NAME(SMask), PDF_NAME(Mask));
                 if (o) smask = pdf_to_num(gctx, o);
 
-                o = pdf_dict_get(gctx, obj, PDF_NAME(Mask));
-                if (o) smask = pdf_to_num(gctx, o);
                 if (pdf_is_jpx_image(gctx, obj)) {
                     img_type = FZ_IMAGE_JPX;
                     ext = "jpx";
@@ -12644,7 +12572,9 @@ SWIGINTERN PyObject *Page__insertImage(struct Page *self,char const *filename,st
                     ref = pdf_add_image(gctx, pdf, image);
                     img_xref = pdf_to_num(gctx, ref);
                 }
-                if (oc) JM_add_oc_object(gctx, pdf, ref, oc);
+                if (oc && xref == 0) {
+                    JM_add_oc_object(gctx, pdf, ref, oc);
+                }
 
                 pdf_dict_puts_drop(gctx, xobject, _imgname, ref);  // update XObject
                 // make contents stream that invokes the image
@@ -12983,7 +12913,7 @@ SWIGINTERN PyObject *Pixmap_copyPixmap(struct Pixmap *self,struct Pixmap *src,Py
 SWIGINTERN PyObject *Pixmap_setAlpha(struct Pixmap *self,PyObject *alphavalues,int premultiply,PyObject *opaque){
             fz_buffer *res = NULL;
             fz_pixmap *pix = (fz_pixmap *) self;
-            int divisor = 65025; // 255*255
+            int divisor = 255;
             int denom;
             fz_try(gctx) {
                 if (pix->alpha == 0) {
@@ -13032,7 +12962,7 @@ SWIGINTERN PyObject *Pixmap_setAlpha(struct Pixmap *self,PyObject *alphavalues,i
                             pix->samples[i+n] = data[k];
                         }
                         if (premultiply == 1) {
-                            denom = (int) data[k] * (int) data[k];
+                            denom = (int) data[k];
                             for (j = i; j < i+n; j++) {
                                 pix->samples[j] = pix->samples[j] * denom / divisor;
                             }
@@ -15460,8 +15390,7 @@ SWIGINTERN PyObject *_wrap_new_Document(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (struct Document *)new_Document((char const *)arg1,arg2,(char const *)arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Document, SWIG_POINTER_NEW |  0 );
@@ -15516,8 +15445,7 @@ SWIGINTERN PyObject *_wrap_Document_load_page(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Page *)Document_load_page(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Page, 0 |  0 );
@@ -15560,8 +15488,7 @@ SWIGINTERN PyObject *_wrap_Document__remove_links_to(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__remove_links_to(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15655,8 +15582,7 @@ SWIGINTERN PyObject *_wrap_Document__insert_font(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__insert_font(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15686,8 +15612,7 @@ SWIGINTERN PyObject *_wrap_Document_get_outline_xrefs(PyObject *SWIGUNUSEDPARM(s
   {
     result = (PyObject *)Document_get_outline_xrefs(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15722,8 +15647,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_get_keys(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_xref_get_keys(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15767,8 +15691,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_get_key(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_xref_get_key(arg1,arg2,(char const *)arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15823,8 +15746,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_set_key(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_xref_set_key(arg1,arg2,(char const *)arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15857,8 +15779,7 @@ SWIGINTERN PyObject *_wrap_Document__extend_toc_items(PyObject *SWIGUNUSEDPARM(s
   {
     result = (PyObject *)Document__extend_toc_items(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15887,8 +15808,7 @@ SWIGINTERN PyObject *_wrap_Document__embfile_names(PyObject *SWIGUNUSEDPARM(self
   {
     result = (PyObject *)Document__embfile_names(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15923,8 +15843,7 @@ SWIGINTERN PyObject *_wrap_Document__embfile_del(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__embfile_del(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -15961,8 +15880,7 @@ SWIGINTERN PyObject *_wrap_Document__embfile_info(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document__embfile_info(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16034,8 +15952,7 @@ SWIGINTERN PyObject *_wrap_Document__embfile_upd(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__embfile_upd(arg1,arg2,arg3,arg4,arg5,arg6);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16076,8 +15993,7 @@ SWIGINTERN PyObject *_wrap_Document__embeddedFileGet(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__embeddedFileGet(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16148,8 +16064,7 @@ SWIGINTERN PyObject *_wrap_Document__embfile_add(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__embfile_add(arg1,(char const *)arg2,arg3,arg4,arg5,arg6);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16214,88 +16129,7 @@ SWIGINTERN PyObject *_wrap_Document_convert_to_pdf(PyObject *SWIGUNUSEDPARM(self
   {
     result = (PyObject *)Document_convert_to_pdf(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
-    }
-  }
-  resultobj = result;
-  return resultobj;
-fail:
-  return NULL;
-}
-
-
-SWIGINTERN PyObject *_wrap_Document_get_oc(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
-  PyObject *resultobj = 0;
-  struct Document *arg1 = (struct Document *) 0 ;
-  int arg2 ;
-  void *argp1 = 0 ;
-  int res1 = 0 ;
-  int val2 ;
-  int ecode2 = 0 ;
-  PyObject *swig_obj[2] ;
-  PyObject *result = 0 ;
-  
-  if (!SWIG_Python_UnpackTuple(args, "Document_get_oc", 2, 2, swig_obj)) SWIG_fail;
-  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Document, 0 |  0 );
-  if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document_get_oc" "', argument " "1"" of type '" "struct Document *""'"); 
-  }
-  arg1 = (struct Document *)(argp1);
-  ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
-  if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Document_get_oc" "', argument " "2"" of type '" "int""'");
-  } 
-  arg2 = (int)(val2);
-  {
-    result = (PyObject *)Document_get_oc(arg1,arg2);
-    if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
-    }
-  }
-  resultobj = result;
-  return resultobj;
-fail:
-  return NULL;
-}
-
-
-SWIGINTERN PyObject *_wrap_Document_set_oc(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
-  PyObject *resultobj = 0;
-  struct Document *arg1 = (struct Document *) 0 ;
-  int arg2 ;
-  int arg3 ;
-  void *argp1 = 0 ;
-  int res1 = 0 ;
-  int val2 ;
-  int ecode2 = 0 ;
-  int val3 ;
-  int ecode3 = 0 ;
-  PyObject *swig_obj[3] ;
-  PyObject *result = 0 ;
-  
-  if (!SWIG_Python_UnpackTuple(args, "Document_set_oc", 3, 3, swig_obj)) SWIG_fail;
-  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Document, 0 |  0 );
-  if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document_set_oc" "', argument " "1"" of type '" "struct Document *""'"); 
-  }
-  arg1 = (struct Document *)(argp1);
-  ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
-  if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Document_set_oc" "', argument " "2"" of type '" "int""'");
-  } 
-  arg2 = (int)(val2);
-  ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
-  if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Document_set_oc" "', argument " "3"" of type '" "int""'");
-  } 
-  arg3 = (int)(val3);
-  {
-    result = (PyObject *)Document_set_oc(arg1,arg2,arg3);
-    if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16323,8 +16157,7 @@ SWIGINTERN PyObject *_wrap_Document_page_count(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Document_page_count(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16352,8 +16185,7 @@ SWIGINTERN PyObject *_wrap_Document_chapter_count(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_chapter_count(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16381,8 +16213,7 @@ SWIGINTERN PyObject *_wrap_Document_last_location(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_last_location(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16417,8 +16248,7 @@ SWIGINTERN PyObject *_wrap_Document_chapter_page_count(PyObject *SWIGUNUSEDPARM(
   {
     result = (PyObject *)Document_chapter_page_count(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16447,8 +16277,7 @@ SWIGINTERN PyObject *_wrap_Document_prev_location(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_prev_location(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16477,8 +16306,7 @@ SWIGINTERN PyObject *_wrap_Document_next_location(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_next_location(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16513,8 +16341,7 @@ SWIGINTERN PyObject *_wrap_Document_location_from_page_number(PyObject *SWIGUNUS
   {
     result = (PyObject *)Document_location_from_page_number(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16543,8 +16370,7 @@ SWIGINTERN PyObject *_wrap_Document_page_number_from_location(PyObject *SWIGUNUS
   {
     result = (PyObject *)Document_page_number_from_location(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16580,8 +16406,7 @@ SWIGINTERN PyObject *_wrap_Document__getMetadata(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__getMetadata(arg1,(char const *)arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16667,8 +16492,7 @@ SWIGINTERN PyObject *_wrap_Document_set_language(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_set_language(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16776,8 +16600,7 @@ SWIGINTERN PyObject *_wrap_Document_layout(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Document_layout(arg1,arg2,arg3,arg4,arg5);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16806,8 +16629,7 @@ SWIGINTERN PyObject *_wrap_Document_make_bookmark(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_make_bookmark(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16836,8 +16658,7 @@ SWIGINTERN PyObject *_wrap_Document_find_bookmark(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_find_bookmark(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16895,8 +16716,7 @@ SWIGINTERN PyObject *_wrap_Document__deleteObject(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document__deleteObject(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16924,8 +16744,7 @@ SWIGINTERN PyObject *_wrap_Document_pdf_catalog(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Document_pdf_catalog(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -16953,8 +16772,7 @@ SWIGINTERN PyObject *_wrap_Document__getPDFfileid(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document__getPDFfileid(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17296,8 +17114,7 @@ SWIGINTERN PyObject *_wrap_Document_save(PyObject *SWIGUNUSEDPARM(self), PyObjec
   {
     result = (PyObject *)Document_save(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14,arg15,arg16);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17426,8 +17243,7 @@ SWIGINTERN PyObject *_wrap_Document_insert_pdf(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Document_insert_pdf(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17484,8 +17300,7 @@ SWIGINTERN PyObject *_wrap_Document__newPage(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Document__newPage(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17514,8 +17329,7 @@ SWIGINTERN PyObject *_wrap_Document_select(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Document_select(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17550,8 +17364,7 @@ SWIGINTERN PyObject *_wrap_Document__delete_page(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__delete_page(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17653,8 +17466,7 @@ SWIGINTERN PyObject *_wrap_Document__get_char_widths(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__get_char_widths(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17693,8 +17505,7 @@ SWIGINTERN PyObject *_wrap_Document_page_xref(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Document_page_xref(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17729,8 +17540,7 @@ SWIGINTERN PyObject *_wrap_Document_page_annot_xrefs(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document_page_annot_xrefs(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17765,8 +17575,7 @@ SWIGINTERN PyObject *_wrap_Document_page_cropbox(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_page_cropbox(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17809,8 +17618,7 @@ SWIGINTERN PyObject *_wrap_Document__getPageInfo(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__getPageInfo(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17857,8 +17665,7 @@ SWIGINTERN PyObject *_wrap_Document_extract_font(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_extract_font(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -17893,8 +17700,7 @@ SWIGINTERN PyObject *_wrap_Document_extract_image(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_extract_image(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18089,8 +17895,7 @@ SWIGINTERN PyObject *_wrap_Document__addFormFont(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document__addFormFont(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18122,8 +17927,7 @@ SWIGINTERN PyObject *_wrap_Document__getOLRootNumber(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__getOLRootNumber(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18151,8 +17955,7 @@ SWIGINTERN PyObject *_wrap_Document_get_new_xref(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_get_new_xref(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18180,8 +17983,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_length(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Document_xref_length(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18232,8 +18034,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_xml_metadata(PyObject *SWIGUNUSEDPARM(s
   {
     result = (PyObject *)Document_xref_xml_metadata(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18261,8 +18062,7 @@ SWIGINTERN PyObject *_wrap_Document_del_xml_metadata(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document_del_xml_metadata(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18298,8 +18098,7 @@ SWIGINTERN PyObject *_wrap_Document_set_xml_metadata(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document_set_xml_metadata(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18356,8 +18155,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_object(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Document_xref_object(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18392,8 +18190,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_stream_raw(PyObject *SWIGUNUSEDPARM(sel
   {
     result = (PyObject *)Document_xref_stream_raw(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18428,8 +18225,7 @@ SWIGINTERN PyObject *_wrap_Document_xref_stream(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Document_xref_stream(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18483,8 +18279,7 @@ SWIGINTERN PyObject *_wrap_Document_update_object(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_update_object(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18537,8 +18332,7 @@ SWIGINTERN PyObject *_wrap_Document_update_stream(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_update_stream(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18566,8 +18360,7 @@ SWIGINTERN PyObject *_wrap_Document__make_page_map(PyObject *SWIGUNUSEDPARM(self
   {
     result = (PyObject *)Document__make_page_map(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18612,8 +18405,7 @@ SWIGINTERN PyObject *_wrap_Document_fullcopy_page(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Document_fullcopy_page(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18672,8 +18464,7 @@ SWIGINTERN PyObject *_wrap_Document__move_copy_page(PyObject *SWIGUNUSEDPARM(sel
   {
     result = (PyObject *)Document__move_copy_page(arg1,arg2,arg3,arg4,arg5);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18708,8 +18499,7 @@ SWIGINTERN PyObject *_wrap_Document__remove_toc_item(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__remove_toc_item(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18784,8 +18574,7 @@ SWIGINTERN PyObject *_wrap_Document__update_toc_item(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__update_toc_item(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18817,8 +18606,7 @@ SWIGINTERN PyObject *_wrap_Document__get_page_labels(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__get_page_labels(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18854,8 +18642,7 @@ SWIGINTERN PyObject *_wrap_Document__set_page_labels(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document__set_page_labels(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18885,8 +18672,7 @@ SWIGINTERN PyObject *_wrap_Document_get_layers(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Document_get_layers(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18931,8 +18717,7 @@ SWIGINTERN PyObject *_wrap_Document_switch_layer(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)Document_switch_layer(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -18969,8 +18754,7 @@ SWIGINTERN PyObject *_wrap_Document_get_layer(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Document_get_layer(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19028,8 +18812,7 @@ SWIGINTERN PyObject *_wrap_Document_set_layer(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Document_set_layer(arg1,arg2,(char const *)arg3,arg4,arg5,arg6);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19082,8 +18865,7 @@ SWIGINTERN PyObject *_wrap_Document_add_layer(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Document_add_layer(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19115,8 +18897,7 @@ SWIGINTERN PyObject *_wrap_Document_layer_ui_configs(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Document_layer_ui_configs(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19161,8 +18942,7 @@ SWIGINTERN PyObject *_wrap_Document_set_layer_ui_config(PyObject *SWIGUNUSEDPARM
   {
     result = (PyObject *)Document_set_layer_ui_config(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19190,8 +18970,7 @@ SWIGINTERN PyObject *_wrap_Document_get_ocgs(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Document_get_ocgs(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19262,8 +19041,7 @@ SWIGINTERN PyObject *_wrap_Document_add_ocg(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Document_add_ocg(arg1,arg2,arg3,arg4,arg5,(char const *)arg6);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19394,8 +19172,7 @@ SWIGINTERN PyObject *_wrap_Page_run(PyObject *SWIGUNUSEDPARM(self), PyObject *ar
   {
     result = (PyObject *)Page_run(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19436,8 +19213,7 @@ SWIGINTERN PyObject *_wrap_Page__get_text_page(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (struct TextPage *)Page__get_text_page(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_TextPage, 0 |  0 );
@@ -19498,8 +19274,7 @@ SWIGINTERN PyObject *_wrap_Page_set_language(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page_set_language(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19542,8 +19317,7 @@ SWIGINTERN PyObject *_wrap_Page_get_svg_image(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Page_get_svg_image(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19601,8 +19375,7 @@ SWIGINTERN PyObject *_wrap_Page__set_opacity(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page__set_opacity(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -19633,8 +19406,7 @@ SWIGINTERN PyObject *_wrap_Page__add_caret_annot(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (struct Annot *)Page__add_caret_annot(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19703,8 +19475,7 @@ SWIGINTERN PyObject *_wrap_Page__add_redact_annot(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (struct Annot *)Page__add_redact_annot(arg1,arg2,arg3,(char const *)arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19739,8 +19510,7 @@ SWIGINTERN PyObject *_wrap_Page__add_line_annot(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (struct Annot *)Page__add_line_annot(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19789,8 +19559,7 @@ SWIGINTERN PyObject *_wrap_Page__add_text_annot(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (struct Annot *)Page__add_text_annot(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19823,8 +19592,7 @@ SWIGINTERN PyObject *_wrap_Page__add_ink_annot(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (struct Annot *)Page__add_ink_annot(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19863,8 +19631,7 @@ SWIGINTERN PyObject *_wrap_Page__add_stamp_annot(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (struct Annot *)Page__add_stamp_annot(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19937,8 +19704,7 @@ SWIGINTERN PyObject *_wrap_Page__add_file_annot(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (struct Annot *)Page__add_file_annot(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -19983,8 +19749,7 @@ SWIGINTERN PyObject *_wrap_Page__add_text_marker(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (struct Annot *)Page__add_text_marker(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20021,8 +19786,7 @@ SWIGINTERN PyObject *_wrap_Page__add_square_or_circle(PyObject *SWIGUNUSEDPARM(s
   {
     result = (struct Annot *)Page__add_square_or_circle(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20059,8 +19823,7 @@ SWIGINTERN PyObject *_wrap_Page__add_multiline(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (struct Annot *)Page__add_multiline(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20147,8 +19910,7 @@ SWIGINTERN PyObject *_wrap_Page__add_freetext_annot(PyObject *SWIGUNUSEDPARM(sel
   {
     result = (struct Annot *)Page__add_freetext_annot(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20196,8 +19958,7 @@ SWIGINTERN PyObject *_wrap_Page__load_annot(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (struct Annot *)Page__load_annot(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20227,8 +19988,7 @@ SWIGINTERN PyObject *_wrap_Page__get_resource_properties(PyObject *SWIGUNUSEDPAR
   {
     result = (PyObject *)Page__get_resource_properties(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20272,8 +20032,7 @@ SWIGINTERN PyObject *_wrap_Page__set_resource_property(PyObject *SWIGUNUSEDPARM(
   {
     result = (PyObject *)Page__set_resource_property(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20365,8 +20124,7 @@ SWIGINTERN PyObject *_wrap_Page__addWidget(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (struct Annot *)Page__addWidget(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Annot, 0 |  0 );
@@ -20405,8 +20163,7 @@ SWIGINTERN PyObject *_wrap_Page_get_displaylist(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (struct DisplayList *)Page_get_displaylist(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_DisplayList, 0 |  0 );
@@ -20434,8 +20191,7 @@ SWIGINTERN PyObject *_wrap_Page__getDrawings(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page__getDrawings(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20472,8 +20228,7 @@ SWIGINTERN PyObject *_wrap_Page__apply_redactions(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Page__apply_redactions(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20542,8 +20297,7 @@ SWIGINTERN PyObject *_wrap_Page__makePixmap(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (struct Pixmap *)Page__makePixmap(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, 0 |  0 );
@@ -20572,8 +20326,7 @@ SWIGINTERN PyObject *_wrap_Page_set_mediabox(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page_set_mediabox(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20602,8 +20355,7 @@ SWIGINTERN PyObject *_wrap_Page_set_cropbox(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Page_set_cropbox(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20829,8 +20581,7 @@ SWIGINTERN PyObject *_wrap_Page_set_rotation(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page_set_rotation(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20859,8 +20610,7 @@ SWIGINTERN PyObject *_wrap_Page__addAnnot_FromString(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)Page__addAnnot_FromString(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20897,8 +20647,7 @@ SWIGINTERN PyObject *_wrap_Page_clean_contents(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Page_clean_contents(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -20992,8 +20741,7 @@ SWIGINTERN PyObject *_wrap_Page__show_pdf_page(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Page__show_pdf_page(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -21110,8 +20858,7 @@ SWIGINTERN PyObject *_wrap_Page__insertImage(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page__insertImage(arg1,(char const *)arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,(char const *)arg11,arg12);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -21143,8 +20890,7 @@ SWIGINTERN PyObject *_wrap_Page_refresh(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Page_refresh(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -21248,8 +20994,7 @@ SWIGINTERN PyObject *_wrap_Page__insertFont(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Page__insertFont(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -21306,8 +21051,7 @@ SWIGINTERN PyObject *_wrap_Page_get_contents(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Page_get_contents(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -21374,8 +21118,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_0(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_0(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21409,8 +21152,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_1(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_1(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21456,8 +21198,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_2(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_2(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21493,8 +21234,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_3(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_3(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21548,8 +21288,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_4(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_4(arg1,arg2,arg3,arg4,arg5);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21569,8 +21308,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_5(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_5(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -21604,8 +21342,7 @@ SWIGINTERN PyObject *_wrap_new_Pixmap__SWIG_6(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct Pixmap *)new_Pixmap__SWIG_6(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, SWIG_POINTER_NEW |  0 );
@@ -22005,8 +21742,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_copyPixmap(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Pixmap_copyPixmap(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22051,8 +21787,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_setAlpha(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Pixmap_setAlpha(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22087,8 +21822,7 @@ SWIGINTERN PyObject *_wrap_Pixmap__getImageData(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Pixmap__getImageData(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22132,8 +21866,7 @@ SWIGINTERN PyObject *_wrap_Pixmap__writeIMG(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Pixmap__writeIMG(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22204,8 +21937,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_pixel(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Pixmap_pixel(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22250,8 +21982,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_setPixel(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Pixmap_setPixel(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22358,8 +22089,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_setRect(PyObject *SWIGUNUSEDPARM(self), PyObje
   {
     result = (PyObject *)Pixmap_setRect(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -22845,8 +22575,7 @@ SWIGINTERN PyObject *_wrap_new_Device__SWIG_0(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct DeviceWrapper *)new_DeviceWrapper__SWIG_0(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_DeviceWrapper, SWIG_POINTER_NEW |  0 );
@@ -22872,8 +22601,7 @@ SWIGINTERN PyObject *_wrap_new_Device__SWIG_1(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct DeviceWrapper *)new_DeviceWrapper__SWIG_1(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_DeviceWrapper, SWIG_POINTER_NEW |  0 );
@@ -22909,8 +22637,7 @@ SWIGINTERN PyObject *_wrap_new_Device__SWIG_2(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct DeviceWrapper *)new_DeviceWrapper__SWIG_2(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_DeviceWrapper, SWIG_POINTER_NEW |  0 );
@@ -23380,8 +23107,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_apn_matrix(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Annot_set_apn_matrix(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23410,8 +23136,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_apn_bbox(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Annot_set_apn_bbox(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23470,8 +23195,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_blendmode(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Annot_set_blendmode(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23501,8 +23225,7 @@ SWIGINTERN PyObject *_wrap_Annot_get_oc(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Annot_get_oc(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23537,8 +23260,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_open(PyObject *SWIGUNUSEDPARM(self), PyObje
   {
     result = (PyObject *)Annot_set_open(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23566,8 +23288,7 @@ SWIGINTERN PyObject *_wrap_Annot_is_open(PyObject *SWIGUNUSEDPARM(self), PyObjec
   {
     result = (PyObject *)Annot_is_open(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23595,8 +23316,7 @@ SWIGINTERN PyObject *_wrap_Annot_has_popup(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Annot_has_popup(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23625,8 +23345,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_popup(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Annot_set_popup(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23654,8 +23373,7 @@ SWIGINTERN PyObject *_wrap_Annot_popup_rect(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Annot_popup_rect(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23683,8 +23401,7 @@ SWIGINTERN PyObject *_wrap_Annot_popup_xref(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (PyObject *)Annot_popup_xref(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23721,8 +23438,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_oc(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Annot_set_oc(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23783,8 +23499,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_language(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Annot_set_language(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23814,8 +23529,7 @@ SWIGINTERN PyObject *_wrap_Annot__getAP(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Annot__getAP(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23854,8 +23568,7 @@ SWIGINTERN PyObject *_wrap_Annot__setAP(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (PyObject *)Annot__setAP(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23883,8 +23596,7 @@ SWIGINTERN PyObject *_wrap_Annot__get_redact_values(PyObject *SWIGUNUSEDPARM(sel
   {
     result = (PyObject *)Annot__get_redact_values(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -23925,8 +23637,7 @@ SWIGINTERN PyObject *_wrap_Annot_get_textpage(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (struct TextPage *)Annot_get_textpage(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_TextPage, 0 |  0 );
@@ -24339,8 +24050,7 @@ SWIGINTERN PyObject *_wrap_Annot_file_info(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Annot_file_info(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24368,8 +24078,7 @@ SWIGINTERN PyObject *_wrap_Annot_get_file(PyObject *SWIGUNUSEDPARM(self), PyObje
   {
     result = (PyObject *)Annot_get_file(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24397,8 +24106,7 @@ SWIGINTERN PyObject *_wrap_Annot_get_sound(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Annot_get_sound(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24462,8 +24170,7 @@ SWIGINTERN PyObject *_wrap_Annot_update_file(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)Annot_update_file(arg1,arg2,arg3,arg4,arg5);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24578,8 +24285,7 @@ SWIGINTERN PyObject *_wrap_Annot_set_info(PyObject *SWIGUNUSEDPARM(self), PyObje
   {
     result = (PyObject *)Annot_set_info(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24725,8 +24431,7 @@ SWIGINTERN PyObject *_wrap_Annot_clean_contents(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Annot_clean_contents(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24783,8 +24488,7 @@ SWIGINTERN PyObject *_wrap_Annot_delete_responses(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Annot_delete_responses(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -24858,8 +24562,7 @@ SWIGINTERN PyObject *_wrap_Annot_get_pixmap(PyObject *SWIGUNUSEDPARM(self), PyOb
   {
     result = (struct Pixmap *)Annot_get_pixmap(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, 0 |  0 );
@@ -25187,8 +24890,7 @@ SWIGINTERN PyObject *_wrap_new_DisplayList(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (struct DisplayList *)new_DisplayList(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_DisplayList, SWIG_POINTER_NEW |  0 );
@@ -25227,8 +24929,7 @@ SWIGINTERN PyObject *_wrap_DisplayList_run(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)DisplayList_run(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25306,8 +25007,7 @@ SWIGINTERN PyObject *_wrap_DisplayList_get_pixmap(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (struct Pixmap *)DisplayList_get_pixmap(arg1,arg2,arg3,arg4,arg5);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Pixmap, 0 |  0 );
@@ -25344,8 +25044,7 @@ SWIGINTERN PyObject *_wrap_DisplayList_get_textpage(PyObject *SWIGUNUSEDPARM(sel
   {
     result = (struct TextPage *)DisplayList_get_textpage(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_TextPage, 0 |  0 );
@@ -25400,8 +25099,7 @@ SWIGINTERN PyObject *_wrap_new_TextPage(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (struct TextPage *)new_TextPage(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_TextPage, SWIG_POINTER_NEW |  0 );
@@ -25457,8 +25155,7 @@ SWIGINTERN PyObject *_wrap_TextPage_search(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)TextPage_search(arg1,(char const *)arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25497,8 +25194,7 @@ SWIGINTERN PyObject *_wrap_TextPage__getNewBlockList(PyObject *SWIGUNUSEDPARM(se
   {
     result = (PyObject *)TextPage__getNewBlockList(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25526,8 +25222,7 @@ SWIGINTERN PyObject *_wrap_TextPage_extractIMGINFO(PyObject *SWIGUNUSEDPARM(self
   {
     result = (PyObject *)TextPage_extractIMGINFO(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25555,8 +25250,7 @@ SWIGINTERN PyObject *_wrap_TextPage_extractBLOCKS(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)TextPage_extractBLOCKS(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25584,8 +25278,7 @@ SWIGINTERN PyObject *_wrap_TextPage_extractWORDS(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)TextPage_extractWORDS(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25643,8 +25336,7 @@ SWIGINTERN PyObject *_wrap_TextPage__extractText(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)TextPage__extractText(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25731,8 +25423,7 @@ SWIGINTERN PyObject *_wrap_new_Graftmap(PyObject *SWIGUNUSEDPARM(self), PyObject
   {
     result = (struct Graftmap *)new_Graftmap(arg1);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Graftmap, SWIG_POINTER_NEW |  0 );
@@ -25800,8 +25491,7 @@ SWIGINTERN PyObject *_wrap_new_TextWriter(PyObject *SWIGUNUSEDPARM(self), PyObje
   {
     result = (struct TextWriter *)new_TextWriter(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_TextWriter, SWIG_POINTER_NEW |  0 );
@@ -25880,8 +25570,7 @@ SWIGINTERN PyObject *_wrap_TextWriter_append(PyObject *SWIGUNUSEDPARM(self), PyO
   {
     result = (PyObject *)TextWriter_append(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -25995,8 +25684,7 @@ SWIGINTERN PyObject *_wrap_TextWriter_write_text(PyObject *SWIGUNUSEDPARM(self),
   {
     result = (PyObject *)TextWriter_write_text(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -26135,8 +25823,7 @@ SWIGINTERN PyObject *_wrap_new_Font(PyObject *SWIGUNUSEDPARM(self), PyObject *ar
   {
     result = (struct Font *)new_Font(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = SWIG_NewPointerObj(SWIG_as_voidptr(result), SWIGTYPE_p_Font, SWIG_POINTER_NEW |  0 );
@@ -26599,8 +26286,7 @@ SWIGINTERN PyObject *_wrap_Tools_set_icc(PyObject *SWIGUNUSEDPARM(self), PyObjec
   {
     result = (PyObject *)Tools_set_icc(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -26909,8 +26595,7 @@ SWIGINTERN PyObject *_wrap_Tools_image_profile(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Tools_image_profile(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27052,8 +26737,7 @@ SWIGINTERN PyObject *_wrap_Tools__fill_widget(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Tools__fill_widget(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27090,8 +26774,7 @@ SWIGINTERN PyObject *_wrap_Tools__save_widget(PyObject *SWIGUNUSEDPARM(self), Py
   {
     result = (PyObject *)Tools__save_widget(arg1,arg2,arg3);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27126,8 +26809,7 @@ SWIGINTERN PyObject *_wrap_Tools__reset_widget(PyObject *SWIGUNUSEDPARM(self), P
   {
     result = (PyObject *)Tools__reset_widget(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27162,8 +26844,7 @@ SWIGINTERN PyObject *_wrap_Tools__parse_da(PyObject *SWIGUNUSEDPARM(self), PyObj
   {
     result = (PyObject *)Tools__parse_da(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27239,8 +26920,7 @@ SWIGINTERN PyObject *_wrap_Tools__get_all_contents(PyObject *SWIGUNUSEDPARM(self
   {
     result = (PyObject *)Tools__get_all_contents(arg1,arg2);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27287,8 +26967,7 @@ SWIGINTERN PyObject *_wrap_Tools__insert_contents(PyObject *SWIGUNUSEDPARM(self)
   {
     result = (PyObject *)Tools__insert_contents(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27823,8 +27502,7 @@ SWIGINTERN PyObject *_wrap_Tools_set_font_width(PyObject *SWIGUNUSEDPARM(self), 
   {
     result = (PyObject *)Tools_set_font_width(arg1,arg2,arg3,arg4);
     if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));
-      return NULL;
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
@@ -27902,8 +27580,6 @@ static PyMethodDef SwigMethods[] = {
 	 { "Document__embeddedFileGet", _wrap_Document__embeddedFileGet, METH_VARARGS, NULL},
 	 { "Document__embfile_add", _wrap_Document__embfile_add, METH_VARARGS, NULL},
 	 { "Document_convert_to_pdf", _wrap_Document_convert_to_pdf, METH_VARARGS, NULL},
-	 { "Document_get_oc", _wrap_Document_get_oc, METH_VARARGS, NULL},
-	 { "Document_set_oc", _wrap_Document_set_oc, METH_VARARGS, NULL},
 	 { "Document_page_count", _wrap_Document_page_count, METH_O, NULL},
 	 { "Document_chapter_count", _wrap_Document_chapter_count, METH_O, NULL},
 	 { "Document_last_location", _wrap_Document_last_location, METH_O, NULL},
@@ -29058,11 +28734,7 @@ SWIG_init(void) {
   if(!gctx)
   {
     PyErr_SetString(PyExc_RuntimeError, "Fatal error: could not create global context.");
-# if PY_MAJOR_VERSION >= 3
     return NULL;
-# else
-    return;
-# endif
   }
   fz_register_document_handlers(gctx);
   

@@ -61,6 +61,8 @@ fitz.Document.set_toc = fitz.utils.setToC
 fitz.Document.set_toc_item = fitz.utils.set_toc_item
 fitz.Document.tobytes = fitz.Document.write
 fitz.Document.subset_fonts = fitz.utils.subset_fonts
+fitz.Document.get_oc = fitz.utils.get_oc
+fitz.Document.set_oc = fitz.utils.set_oc
 
 
 # ------------------------------------------------------------------------------
