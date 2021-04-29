@@ -2,14 +2,12 @@
 
 ![logo](https://github.com/pymupdf/PyMuPDF/blob/master/demo/pymupdf.jpg)
 
-Release date: April 25, 2021
+Release date: April 30, 2021
 
 **Travis-CI:** [![Build Status](https://travis-ci.org/JorjMcKie/py-mupdf.svg?branch=master)](https://travis-ci.org/JorjMcKie/py-mupdf)
 
 
-On **[PyPI](https://pypi.org/project/PyMuPDF)** since August 2016: 
-[![Downloads](https://pepy.tech/badge/pymupdf)](https://pepy.tech/project/pymupdf)
-
+On **[PyPI](https://pypi.org/project/PyMuPDF)** since August 2016: [![Downloads](https://static.pepy.tech/personalized-badge/pymupdf?period=total&units=international_system&left_color=black&right_color=orange&left_text=Downloads)](https://pepy.tech/project/pymupdf)
 
 # Authors
 * [Jorj X. McKie](mailto:jorj.x.mckie@outlook.de)

@@ -99,6 +99,7 @@ fitz.Page.show_pdf_page = fitz.utils.show_pdf_page
 fitz.Page.update_link = fitz.utils.updateLink
 fitz.Page.write_text = fitz.utils.write_text
 fitz.Page.get_label = fitz.utils.get_label
+fitz.Page.get_image_rects = fitz.utils.get_image_rects
 
 # ------------------------------------------------------------------------
 # Annot

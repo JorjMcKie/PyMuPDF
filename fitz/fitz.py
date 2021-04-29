@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.13"
-VersionDate = "2021-04-25 10:25:45"
-version = (VersionBind, VersionFitz, "20210425102545")
+VersionDate = "2021-04-29 09:59:29"
+version = (VersionBind, VersionFitz, "20210429095929")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -4146,20 +4146,20 @@ class Document(object):
         return _fitz.Document_is_pdf(self)
 
     @property
-    def _hasXrefStream(self) -> AnyType:
+    def has_xref_streams(self) -> AnyType:
         """Check if xref table is a stream."""
         if self.is_closed:
             raise ValueError("document closed")
 
-        return _fitz.Document__hasXrefStream(self)
+        return _fitz.Document_has_xref_streams(self)
 
     @property
-    def _hasXrefOldStyle(self) -> AnyType:
+    def has_old_style_xrefs(self) -> AnyType:
         """Check if xref table is old style."""
         if self.is_closed:
             raise ValueError("document closed")
 
-        return _fitz.Document__hasXrefOldStyle(self)
+        return _fitz.Document_has_old_style_xrefs(self)
 
     @property
     def is_dirty(self) -> AnyType:
@@ -5149,7 +5149,7 @@ class Page(object):
 
         """Get rectangle occupied by image 'name'.
 
-        'name' is either an item of the image full list, or the referencing
+        'name' is either an item of the image list, or the referencing
         name string - elem[7] of the resp. item."""
         CheckParent(self)
         doc = self.parent
@@ -7836,10 +7836,10 @@ class TextPage(object):
         self._getNewBlockList(page_dict, raw)
         return page_dict
 
-    def extractIMGINFO(self) -> AnyType:
+    def extractIMGINFO(self, hashes: int = 0) -> AnyType:
         """Return a list with image meta information."""
 
-        return _fitz.TextPage_extractIMGINFO(self)
+        return _fitz.TextPage_extractIMGINFO(self, hashes)
 
     def extractBLOCKS(self) -> AnyType:
         """Return a list with text block information."""

@@ -8423,6 +8423,116 @@ PyObject *JM_convert_to_pdf(fz_context *ctx, fz_document *doc, int fp, int tp, i
 }
 
 
+//-------------------------------------
+// fz_output for Python file objects
+//-------------------------------------
+static void
+JM_bytesio_write(fz_context *ctx, void *opaque, const void *data, size_t len)
+{  // bio.write(bytes object)
+    PyObject *bio = opaque, *b, *name, *rc;
+    fz_try(ctx){
+        b = PyBytes_FromStringAndSize((const char *) data, (Py_ssize_t) len);
+        name = PyUnicode_FromString("write");
+        rc = PyObject_CallMethodObjArgs(bio, name, b, NULL);
+        if (!rc) {
+            THROWMSG(ctx, "could not write to Py file obj");
+        }
+    }
+    fz_always(ctx) {
+        Py_XDECREF(b);
+        Py_XDECREF(name);
+        Py_XDECREF(rc);
+        PyErr_Clear();
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
+
+static void
+JM_bytesio_truncate(fz_context *ctx, void *opaque)
+{  // bio.truncate(bio.tell()) !!!
+    PyObject *bio = opaque, *trunc = NULL, *tell = NULL, *rctell= NULL, *rc = NULL;
+    fz_try(ctx) {
+        trunc = PyUnicode_FromString("truncate");
+        tell = PyUnicode_FromString("tell");
+        rctell = PyObject_CallMethodObjArgs(bio, tell, NULL);
+        rc = PyObject_CallMethodObjArgs(bio, trunc, rctell, NULL);
+        if (!rc) {
+            THROWMSG(ctx, "could not truncate Py file obj");
+        }
+    }
+    fz_always(ctx) {
+        Py_XDECREF(tell);
+        Py_XDECREF(trunc);
+        Py_XDECREF(rc);
+        Py_XDECREF(rctell);
+        PyErr_Clear();
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
+
+static int64_t
+JM_bytesio_tell(fz_context *ctx, void *opaque)
+{  // returns bio.tell() -> int
+    PyObject *bio = opaque, *rc = NULL, *name = NULL;
+    int64_t pos = 0;
+    fz_try(ctx) {
+        name = PyUnicode_FromString("tell");
+        rc = PyObject_CallMethodObjArgs(bio, name, NULL);
+        if (!rc) {
+            THROWMSG(ctx, "could not tell Py file obj");
+        }
+        pos = (int64_t) PyLong_AsUnsignedLongLong(rc);
+    }
+    fz_always(ctx) {
+        Py_XDECREF(name);
+        Py_XDECREF(rc);
+        PyErr_Clear();
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+    return pos;
+}
+
+
+static void
+JM_bytesio_seek(fz_context *ctx, void *opaque, int64_t off, int whence)
+{  // bio.seek(off, whence=0)
+    PyObject *bio = opaque, *rc = NULL, *name = NULL, *pos = NULL;
+    fz_try(ctx) {
+        name = PyUnicode_FromString("seek");
+        pos = PyLong_FromUnsignedLongLong((unsigned long long) off);
+        rc = PyObject_CallMethodObjArgs(bio, name, pos, whence, NULL);
+        if (!rc) {
+            THROWMSG(ctx, "could not seek Py file obj");
+        }
+    }
+    fz_always(ctx) {
+        Py_XDECREF(rc);
+        Py_XDECREF(name);
+        Py_XDECREF(pos);
+        PyErr_Clear();
+    }
+    fz_catch(ctx) {
+        fz_rethrow(ctx);
+    }
+}
+
+fz_output *
+JM_new_output_fileptr(fz_context *ctx, PyObject *bio)
+{
+    fz_output *out = fz_new_output(ctx, 0, bio, JM_bytesio_write, NULL, NULL);
+    out->seek = JM_bytesio_seek;
+    out->tell = JM_bytesio_tell;
+    out->truncate = JM_bytesio_truncate;
+    return out;
+}
+
+
 typedef struct
 {
 	fz_device super;
@@ -8637,116 +8747,6 @@ fz_device *JM_new_tracedraw_device(fz_context *ctx, PyObject *out)
 	return (fz_device *)dev;
 }
 
-
-
-//-------------------------------------
-// fz_output for Python file objects
-//-------------------------------------
-static void
-JM_bytesio_write(fz_context *ctx, void *opaque, const void *data, size_t len)
-{  // bio.write(bytes object)
-    PyObject *bio = opaque, *b, *name, *rc;
-    fz_try(ctx){
-        b = PyBytes_FromStringAndSize((const char *) data, (Py_ssize_t) len);
-        name = PyUnicode_FromString("write");
-        rc = PyObject_CallMethodObjArgs(bio, name, b, NULL);
-        if (!rc) {
-            THROWMSG(ctx, "could not write to Py file obj");
-        }
-    }
-    fz_always(ctx) {
-        Py_XDECREF(b);
-        Py_XDECREF(name);
-        Py_XDECREF(rc);
-        PyErr_Clear();
-    }
-    fz_catch(ctx) {
-        fz_rethrow(ctx);
-    }
-}
-
-static void
-JM_bytesio_truncate(fz_context *ctx, void *opaque)
-{  // bio.truncate(bio.tell()) !!!
-    PyObject *bio = opaque, *trunc = NULL, *tell = NULL, *rctell= NULL, *rc = NULL;
-    fz_try(ctx) {
-        trunc = PyUnicode_FromString("truncate");
-        tell = PyUnicode_FromString("tell");
-        rctell = PyObject_CallMethodObjArgs(bio, tell, NULL);
-        rc = PyObject_CallMethodObjArgs(bio, trunc, rctell, NULL);
-        if (!rc) {
-            THROWMSG(ctx, "could not truncate Py file obj");
-        }
-    }
-    fz_always(ctx) {
-        Py_XDECREF(tell);
-        Py_XDECREF(trunc);
-        Py_XDECREF(rc);
-        Py_XDECREF(rctell);
-        PyErr_Clear();
-    }
-    fz_catch(ctx) {
-        fz_rethrow(ctx);
-    }
-}
-
-static int64_t
-JM_bytesio_tell(fz_context *ctx, void *opaque)
-{  // returns bio.tell() -> int
-    PyObject *bio = opaque, *rc = NULL, *name = NULL;
-    int64_t pos = 0;
-    fz_try(ctx) {
-        name = PyUnicode_FromString("tell");
-        rc = PyObject_CallMethodObjArgs(bio, name, NULL);
-        if (!rc) {
-            THROWMSG(ctx, "could not tell Py file obj");
-        }
-        pos = (int64_t) PyLong_AsUnsignedLongLong(rc);
-    }
-    fz_always(ctx) {
-        Py_XDECREF(name);
-        Py_XDECREF(rc);
-        PyErr_Clear();
-    }
-    fz_catch(ctx) {
-        fz_rethrow(ctx);
-    }
-    return pos;
-}
-
-
-static void
-JM_bytesio_seek(fz_context *ctx, void *opaque, int64_t off, int whence)
-{  // bio.seek(off, whence=0)
-    PyObject *bio = opaque, *rc = NULL, *name = NULL, *pos = NULL;
-    fz_try(ctx) {
-        name = PyUnicode_FromString("seek");
-        pos = PyLong_FromUnsignedLongLong((unsigned long long) off);
-        rc = PyObject_CallMethodObjArgs(bio, name, pos, whence, NULL);
-        if (!rc) {
-            THROWMSG(ctx, "could not seek Py file obj");
-        }
-    }
-    fz_always(ctx) {
-        Py_XDECREF(rc);
-        Py_XDECREF(name);
-        Py_XDECREF(pos);
-        PyErr_Clear();
-    }
-    fz_catch(ctx) {
-        fz_rethrow(ctx);
-    }
-}
-
-fz_output *
-JM_new_output_fileptr(fz_context *ctx, PyObject *bio)
-{
-    fz_output *out = fz_new_output(ctx, 0, bio, JM_bytesio_write, NULL, NULL);
-    out->seek = JM_bytesio_seek;
-    out->tell = JM_bytesio_tell;
-    out->truncate = JM_bytesio_truncate;
-    return out;
-}
 
 SWIGINTERN void delete_Document(struct Document *self){
             DEBUGMSG1("Document w/o close");
@@ -10054,13 +10054,13 @@ SWIGINTERN PyObject *Document_is_pdf(struct Document *self){
             if (pdf_specifics(gctx, (fz_document *) self)) Py_RETURN_TRUE;
             else Py_RETURN_FALSE;
         }
-SWIGINTERN PyObject *Document__hasXrefStream(struct Document *self){
+SWIGINTERN PyObject *Document_has_xref_streams(struct Document *self){
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
             if (!pdf) Py_RETURN_FALSE;
             if (pdf->has_xref_streams) Py_RETURN_TRUE;
             Py_RETURN_FALSE;
         }
-SWIGINTERN PyObject *Document__hasXrefOldStyle(struct Document *self){
+SWIGINTERN PyObject *Document_has_old_style_xrefs(struct Document *self){
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
             if (!pdf) Py_RETURN_FALSE;
             if (pdf->has_old_style_xrefs) Py_RETURN_TRUE;
@@ -10571,6 +10571,7 @@ SWIGINTERN PyObject *Document__delToC(struct Document *self){
 SWIGINTERN PyObject *Document_is_stream(struct Document *self,int xref){
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
             if (!pdf) Py_RETURN_FALSE;  // not a PDF
+            if (xref == -1) return JM_BOOL(pdf_is_stream(gctx, pdf_trailer(gctx, pdf)));
             return JM_BOOL(pdf_obj_num_is_stream(gctx, pdf, xref));
         }
 SWIGINTERN PyObject *Document_need_appearances(struct Document *self,PyObject *value){
@@ -10851,9 +10852,13 @@ SWIGINTERN PyObject *Document_xref_stream_raw(struct Document *self,int xref){
             fz_try(gctx) {
                 ASSERT_PDF(pdf);
                 int xreflen = pdf_xref_len(gctx, pdf);
-                if (!INRANGE(xref, 1, xreflen-1))
+                if (!INRANGE(xref, 1, xreflen-1) && xref != -1)
                     THROWMSG(gctx, "bad xref");
-                obj = pdf_new_indirect(gctx, pdf, xref, 0);
+                if (xref >= 0) {
+                    obj = pdf_new_indirect(gctx, pdf, xref, 0);
+                } else {
+                    obj = pdf_trailer(gctx, pdf);
+                }
                 if (pdf_is_stream(gctx, obj))
                 {
                     res = pdf_load_raw_stream_number(gctx, pdf, xref);
@@ -10862,7 +10867,9 @@ SWIGINTERN PyObject *Document_xref_stream_raw(struct Document *self,int xref){
             }
             fz_always(gctx) {
                 fz_drop_buffer(gctx, res);
-                pdf_drop_obj(gctx, obj);
+                if (xref >= 0) {
+                    pdf_drop_obj(gctx, obj);
+                }
             }
             fz_catch(gctx)
             {
@@ -10881,9 +10888,13 @@ SWIGINTERN PyObject *Document_xref_stream(struct Document *self,int xref){
             fz_try(gctx) {
                 ASSERT_PDF(pdf);
                 int xreflen = pdf_xref_len(gctx, pdf);
-                if (!INRANGE(xref, 1, xreflen-1))
+                if (!INRANGE(xref, 1, xreflen-1) && xref != -1)
                     THROWMSG(gctx, "bad xref");
-                obj = pdf_new_indirect(gctx, pdf, xref, 0);
+                if (xref >= 0) {
+                    obj = pdf_new_indirect(gctx, pdf, xref, 0);
+                } else {
+                    obj = pdf_trailer(gctx, pdf);
+                }
                 if (pdf_is_stream(gctx, obj))
                 {
                     res = pdf_load_stream_number(gctx, pdf, xref);
@@ -10892,7 +10903,9 @@ SWIGINTERN PyObject *Document_xref_stream(struct Document *self,int xref){
             }
             fz_always(gctx) {
                 fz_drop_buffer(gctx, res);
-                pdf_drop_obj(gctx, obj);
+                if (xref >= 0) {
+                    pdf_drop_obj(gctx, obj);
+                }
             }
             fz_catch(gctx)
             {
@@ -13158,7 +13171,7 @@ SWIGINTERN PyObject *Pixmap_is_monochrome(struct Pixmap *self){
 SWIGINTERN PyObject *Pixmap_digest(struct Pixmap *self){
             unsigned char digest[16];
             fz_md5_pixmap(gctx, (fz_pixmap *) self, digest);
-            return Py_BuildValue("y", digest);
+            return PyBytes_FromStringAndSize(digest,16);
         }
 SWIGINTERN PyObject *Pixmap_stride(struct Pixmap *self){
             return PyLong_FromSize_t((size_t) fz_pixmap_stride(gctx, (fz_pixmap *) self));
@@ -14501,11 +14514,12 @@ SWIGINTERN PyObject *TextPage__getNewBlockList(struct TextPage *self,PyObject *p
             }
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *TextPage_extractIMGINFO(struct TextPage *self){
+SWIGINTERN PyObject *TextPage_extractIMGINFO(struct TextPage *self,int hashes){
             fz_stext_block *block;
             int block_n = -1;
             fz_stext_page *this_tpage = (fz_stext_page *) self;
             PyObject *rc = NULL, *block_dict = NULL;
+            fz_pixmap *pix = NULL;
             fz_try(gctx) {
                 rc = PyList_New(0);
                 for (block = this_tpage->first_block; block; block = block->next) {
@@ -14513,7 +14527,14 @@ SWIGINTERN PyObject *TextPage_extractIMGINFO(struct TextPage *self){
                     if (block->type == FZ_STEXT_BLOCK_TEXT) {
                         continue;
                     }
+                    unsigned char digest[16];
                     fz_image *img = block->u.i.image;
+                    if (hashes) {
+                        pix = fz_get_pixmap_from_image(gctx, img, NULL, NULL, NULL, NULL);
+                        fz_md5_pixmap(gctx, pix, digest);
+                        fz_drop_pixmap(gctx, pix);
+                        pix = NULL;
+                    }
                     fz_colorspace *cs = img->colorspace;
                     block_dict = PyDict_New();
                     DICT_SETITEM_DROP(block_dict, dictkey_number, Py_BuildValue("i", block_n));
@@ -14539,6 +14560,10 @@ SWIGINTERN PyObject *TextPage_extractIMGINFO(struct TextPage *self){
                                     Py_BuildValue("i", (int) img->bpc));
                     DICT_SETITEM_DROP(block_dict, dictkey_size,
                                     Py_BuildValue("n", (Py_ssize_t) fz_image_size(gctx, img)));
+                    if (hashes) {
+                        DICT_SETITEMSTR_DROP(block_dict, "digest",
+                                    PyBytes_FromStringAndSize(digest, 16));
+                    }
                     LIST_APPEND_DROP(rc, block_dict);
                 }
             }
@@ -14547,6 +14572,7 @@ SWIGINTERN PyObject *TextPage_extractIMGINFO(struct TextPage *self){
             fz_catch(gctx) {
                 Py_CLEAR(rc);
                 Py_CLEAR(block_dict);
+                fz_drop_pixmap(gctx, pix);
                 return NULL;
             }
             return rc;
@@ -16805,7 +16831,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Document__hasXrefStream(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Document_has_xref_streams(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Document *arg1 = (struct Document *) 0 ;
   void *argp1 = 0 ;
@@ -16817,10 +16843,10 @@ SWIGINTERN PyObject *_wrap_Document__hasXrefStream(PyObject *SWIGUNUSEDPARM(self
   swig_obj[0] = args;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Document, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document__hasXrefStream" "', argument " "1"" of type '" "struct Document *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document_has_xref_streams" "', argument " "1"" of type '" "struct Document *""'"); 
   }
   arg1 = (struct Document *)(argp1);
-  result = (PyObject *)Document__hasXrefStream(arg1);
+  result = (PyObject *)Document_has_xref_streams(arg1);
   resultobj = result;
   return resultobj;
 fail:
@@ -16828,7 +16854,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Document__hasXrefOldStyle(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Document_has_old_style_xrefs(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Document *arg1 = (struct Document *) 0 ;
   void *argp1 = 0 ;
@@ -16840,10 +16866,10 @@ SWIGINTERN PyObject *_wrap_Document__hasXrefOldStyle(PyObject *SWIGUNUSEDPARM(se
   swig_obj[0] = args;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Document, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document__hasXrefOldStyle" "', argument " "1"" of type '" "struct Document *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document_has_old_style_xrefs" "', argument " "1"" of type '" "struct Document *""'"); 
   }
   arg1 = (struct Document *)(argp1);
-  result = (PyObject *)Document__hasXrefOldStyle(arg1);
+  result = (PyObject *)Document_has_old_style_xrefs(arg1);
   resultobj = result;
   return resultobj;
 fail:
@@ -25207,20 +25233,29 @@ fail:
 SWIGINTERN PyObject *_wrap_TextPage_extractIMGINFO(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct TextPage *arg1 = (struct TextPage *) 0 ;
+  int arg2 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
-  PyObject *swig_obj[1] ;
+  int val2 ;
+  int ecode2 = 0 ;
+  PyObject *swig_obj[2] ;
   PyObject *result = 0 ;
   
-  if (!args) SWIG_fail;
-  swig_obj[0] = args;
+  if (!SWIG_Python_UnpackTuple(args, "TextPage_extractIMGINFO", 1, 2, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_TextPage, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "TextPage_extractIMGINFO" "', argument " "1"" of type '" "struct TextPage *""'"); 
   }
   arg1 = (struct TextPage *)(argp1);
+  if (swig_obj[1]) {
+    ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
+    if (!SWIG_IsOK(ecode2)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "TextPage_extractIMGINFO" "', argument " "2"" of type '" "int""'");
+    } 
+    arg2 = (int)(val2);
+  }
   {
-    result = (PyObject *)TextPage_extractIMGINFO(arg1);
+    result = (PyObject *)TextPage_extractIMGINFO(arg1,arg2);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -27601,8 +27636,8 @@ static PyMethodDef SwigMethods[] = {
 	 { "Document_pdf_catalog", _wrap_Document_pdf_catalog, METH_O, NULL},
 	 { "Document__getPDFfileid", _wrap_Document__getPDFfileid, METH_O, NULL},
 	 { "Document_is_pdf", _wrap_Document_is_pdf, METH_O, NULL},
-	 { "Document__hasXrefStream", _wrap_Document__hasXrefStream, METH_O, NULL},
-	 { "Document__hasXrefOldStyle", _wrap_Document__hasXrefOldStyle, METH_O, NULL},
+	 { "Document_has_xref_streams", _wrap_Document_has_xref_streams, METH_O, NULL},
+	 { "Document_has_old_style_xrefs", _wrap_Document_has_old_style_xrefs, METH_O, NULL},
 	 { "Document_is_dirty", _wrap_Document_is_dirty, METH_O, NULL},
 	 { "Document_can_save_incrementally", _wrap_Document_can_save_incrementally, METH_O, NULL},
 	 { "Document_is_repaired", _wrap_Document_is_repaired, METH_O, NULL},
@@ -27833,7 +27868,7 @@ static PyMethodDef SwigMethods[] = {
 	 { "new_TextPage", _wrap_new_TextPage, METH_O, NULL},
 	 { "TextPage_search", _wrap_TextPage_search, METH_VARARGS, NULL},
 	 { "TextPage__getNewBlockList", _wrap_TextPage__getNewBlockList, METH_VARARGS, NULL},
-	 { "TextPage_extractIMGINFO", _wrap_TextPage_extractIMGINFO, METH_O, NULL},
+	 { "TextPage_extractIMGINFO", _wrap_TextPage_extractIMGINFO, METH_VARARGS, NULL},
 	 { "TextPage_extractBLOCKS", _wrap_TextPage_extractBLOCKS, METH_O, NULL},
 	 { "TextPage_extractWORDS", _wrap_TextPage_extractWORDS, METH_O, NULL},
 	 { "TextPage_rect", _wrap_TextPage_rect, METH_O, NULL},
