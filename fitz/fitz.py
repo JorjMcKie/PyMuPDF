@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.13"
-VersionDate = "2021-04-29 09:59:29"
-version = (VersionBind, VersionFitz, "20210429095929")
+VersionDate = "2021-05-03 08:51:54"
+version = (VersionBind, VersionFitz, "20210503085154")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -5150,7 +5150,8 @@ class Page(object):
         """Get rectangle occupied by image 'name'.
 
         'name' is either an item of the image list, or the referencing
-        name string - elem[7] of the resp. item."""
+        name string - elem[7] of the resp. item.
+        """
         CheckParent(self)
         doc = self.parent
         if doc.is_closed or doc.is_encrypted:
@@ -5169,7 +5170,7 @@ class Page(object):
             item = name
         else:
             imglist = [
-                i for i in doc.get_page_images(self.number, True) if name == i[-3]
+                i for i in doc.get_page_images(self.number, True) if name == i[7]
             ]
             if len(imglist) == 1:
                 item = imglist[0]
@@ -5179,9 +5180,10 @@ class Page(object):
                 raise ValueError("found multiple images named '%s'." % name)
         xref = item[-1]
         if xref != 0:
-            xobjs = [x for x in self.get_xobjects() if x[0] == xref and x[2] == 0]
-            if xobjs == []:
-                raise ValueError("image in unsupported Form XObject")
+            # xobjs = [x for x in self.get_xobjects() if x[0] == xref and x[2] == 0]
+            # if xobjs == []:
+            #    raise ValueError("image in unsupported Form XObject")
+            return self.get_image_rects(item, transform=transform)[0]
 
         val = _fitz.Page_get_image_bbox(self, name, transform)
 
@@ -6074,33 +6076,41 @@ class Page(object):
             self, fz_srcpage, overlay, matrix, xref, oc, clip, graftmap, _imgname
         )
 
-    def _insertImage(
+    def _insert_image(
         self,
         filename: OptStr = None,
         pixmap: "Pixmap" = None,
         stream: AnyType = None,
         imask: AnyType = None,
+        clip: rect_like = None,
         overlay: int = 1,
+        rotate: int = 0,
+        keep_proportion: int = 1,
         oc: int = 0,
+        width: int = 0,
+        height: int = 0,
         xref: int = 0,
-        alpha: int = 0,
-        matrix: AnyType = None,
+        alpha: int = -1,
         _imgname: OptStr = None,
-        _imgpointer: AnyType = None,
+        digests: AnyType = None,
     ) -> AnyType:
-        return _fitz.Page__insertImage(
+        return _fitz.Page__insert_image(
             self,
             filename,
             pixmap,
             stream,
             imask,
+            clip,
             overlay,
+            rotate,
+            keep_proportion,
             oc,
+            width,
+            height,
             xref,
             alpha,
-            matrix,
             _imgname,
-            _imgpointer,
+            digests,
         )
 
     def refresh(self) -> AnyType:
@@ -6354,6 +6364,7 @@ class Page(object):
 
     def _erase(self):
         self._reset_annot_refs()
+        self._image_infos = None
         try:
             self.parent._forget_page(self)
         except:
@@ -6421,20 +6432,32 @@ class Pixmap(object):
 
         return _fitz.Pixmap_shrink(self, factor)
 
-    def tintWith(self, black: int, white: int) -> None:
-        return _fitz.Pixmap_tintWith(self, black, white)
+    def gamma_with(self, gamma: float) -> None:
+        """Apply correction with some float.
+        gamma=1 is a no-op."""
 
-    def clearWith(self, *args) -> None:
+        return _fitz.Pixmap_gamma_with(self, gamma)
+
+    def tint_with(self, black: int, white: int) -> None:
+        """Tint colors with modifiers for black and white."""
+
+        if not self.colorspace or self.colorspace.n > 3:
+            print("warning: colorspace invalid for function")
+            return
+
+        return _fitz.Pixmap_tint_with(self, black, white)
+
+    def clear_with(self, *args) -> None:
         """Fill all color components with same value."""
 
-        return _fitz.Pixmap_clearWith(self, *args)
+        return _fitz.Pixmap_clear_with(self, *args)
 
-    def copyPixmap(self, src: "Pixmap", bbox: AnyType) -> AnyType:
+    def copy(self, src: "Pixmap", bbox: AnyType) -> AnyType:
         """Copy bbox from another Pixmap."""
 
-        return _fitz.Pixmap_copyPixmap(self, src, bbox)
+        return _fitz.Pixmap_copy(self, src, bbox)
 
-    def setAlpha(
+    def set_alpha(
         self,
         alphavalues: AnyType = None,
         premultiply: int = 1,
@@ -6443,12 +6466,12 @@ class Pixmap(object):
         """Set alpha channel to values contained in a byte array.
         If omitted, set alphas to 255."""
 
-        return _fitz.Pixmap_setAlpha(self, alphavalues, premultiply, opaque)
+        return _fitz.Pixmap_set_alpha(self, alphavalues, premultiply, opaque)
 
-    def _getImageData(self, format: int) -> AnyType:
-        return _fitz.Pixmap__getImageData(self, format)
+    def _tobytes(self, format: int) -> AnyType:
+        return _fitz.Pixmap__tobytes(self, format)
 
-    def getImageData(self, output="png"):
+    def tobytes(self, output="png"):
         """Convert to binary image stream of desired type.
 
         Can be used as input to GUI packages like tkinter.
@@ -6476,23 +6499,13 @@ class Pixmap(object):
             raise ValueError("'%s' cannot have alpha" % output)
         if self.colorspace and self.colorspace.n > 3 and idx in (1, 2, 4):
             raise ValueError("unsupported colorspace for '%s'" % output)
-        barray = self._getImageData(idx)
-        return barray
-
-    def getPNGdata(self):
-        """Wrapper for Pixmap.getImageData("png")."""
-        barray = self._getImageData(1)
-        return barray
-
-    def getPNGData(self):
-        """Wrapper for Pixmap.getImageData("png")."""
-        barray = self._getImageData(1)
+        barray = self._tobytes(idx)
         return barray
 
     def _writeIMG(self, filename: str, format: int) -> AnyType:
         return _fitz.Pixmap__writeIMG(self, filename, format)
 
-    def writeImage(self, filename, output=None):
+    def save(self, filename, output=None):
         """Output as image in format determined by filename extension.
 
         Args:
@@ -6530,15 +6543,11 @@ class Pixmap(object):
 
         return self._writeIMG(filename, idx)
 
-    def writePNG(self, filename):
-        """Wrapper for Pixmap.writeImage(filename, "png")."""
-        return self._writeIMG(filename, 1)
-
-    def pillowWrite(self, *args, **kwargs):
+    def pil_save(self, *args, **kwargs):
         """Write to image file using Pillow.
 
         Arguments are passed to Pillow's Image.save() method.
-        Use instead of writeImage when other output formats are desired.
+        Use instead of save when other output formats are desired.
         """
         try:
             from PIL import Image
@@ -6563,22 +6572,22 @@ class Pixmap(object):
 
         img.save(*args, **kwargs)
 
-    def pillowData(self, *args, **kwargs):
+    def pil_tobytes(self, *args, **kwargs):
         """Convert to binary image stream using pillow.
 
         Arguments are passed to Pillow's Image.save() method.
-        Use it instead of writeImage when other output formats are needed.
+        Use it instead of save when other output formats are needed.
         """
         from io import BytesIO
 
         bytes_out = BytesIO()
-        self.pillowWrite(bytes_out, *args, **kwargs)
+        self.pil_save(bytes_out, *args, **kwargs)
         return bytes_out.getvalue()
 
-    def invertIRect(self, bbox: AnyType = None) -> AnyType:
+    def invert_irect(self, bbox: AnyType = None) -> AnyType:
         """Invert the colors inside a bbox."""
 
-        return _fitz.Pixmap_invertIRect(self, bbox)
+        return _fitz.Pixmap_invert_irect(self, bbox)
 
     def pixel(self, x: int, y: int) -> AnyType:
         """Get color tuple of pixel (x, y).
@@ -6586,27 +6595,27 @@ class Pixmap(object):
 
         return _fitz.Pixmap_pixel(self, x, y)
 
-    def setPixel(self, x: int, y: int, color: AnyType) -> AnyType:
+    def set_pixel(self, x: int, y: int, color: AnyType) -> AnyType:
         """Set color of pixel (x, y)."""
 
-        return _fitz.Pixmap_setPixel(self, x, y, color)
+        return _fitz.Pixmap_set_pixel(self, x, y, color)
 
-    def setOrigin(self, x: int, y: int) -> AnyType:
+    def set_origin(self, x: int, y: int) -> AnyType:
         """Set top-left coordinates."""
 
-        return _fitz.Pixmap_setOrigin(self, x, y)
+        return _fitz.Pixmap_set_origin(self, x, y)
 
-    def setResolution(self, xres: int, yres: int) -> AnyType:
+    def set_dpi(self, xres: int, yres: int) -> AnyType:
         """Set resolution in both dimensions.
 
-        Use pillowWrite to reflect this in output image."""
+        Use pil_save to reflect this in output image."""
 
-        return _fitz.Pixmap_setResolution(self, xres, yres)
+        return _fitz.Pixmap_set_dpi(self, xres, yres)
 
-    def setRect(self, bbox: AnyType, color: AnyType) -> AnyType:
+    def set_rect(self, bbox: AnyType, color: AnyType) -> AnyType:
         """Set color of all pixels in bbox."""
 
-        return _fitz.Pixmap_setRect(self, bbox, color)
+        return _fitz.Pixmap_set_rect(self, bbox, color)
 
     @property
     def is_monochrome(self) -> AnyType:
@@ -7362,7 +7371,7 @@ class Annot(object):
             if abs(apnmat - Matrix(1, 1)) < 1e-5:
                 return  # matrix already is a no-op
             quad = self.rect.morph(M, ~apnmat)  # derotate rect
-            self.setRect(quad.rect)
+            self.set_rect(quad.rect)
             self.set_apn_matrix(Matrix(1, 1))  # appearance matrix = no-op
             return
 

@@ -4538,6 +4538,63 @@ JM_insert_font(fz_context *ctx, pdf_document *pdf, char *bfname, char *fontfile,
     return value;
 }
 
+
+//-----------------------------------------------------------------------------
+// compute image isnertion matrix
+//-----------------------------------------------------------------------------
+fz_matrix
+calc_image_matrix(int width, int height, PyObject *tr, int rotate, int keep)
+{
+    float large, small, fw, fh, trw, trh, f, w, h;
+    fz_rect trect = JM_rect_from_py(tr);
+    fz_matrix rot = fz_rotate((float) rotate);
+    trw = trect.x1 - trect.x0;
+    trh = trect.y1 - trect.y0;
+    w = trw;
+    h = trh;
+    if (keep) {
+        large = (float) MAX(width, height);
+        fw = (float) width / large;
+        fh = (float) height / large;
+    } else {
+        fw = fh = 1;
+    }
+    small = MIN(fw, fh);
+    if (rotate != 0 && rotate != 180) {
+        f = fw;
+        fw = fh;
+        fh = f;
+    }
+    if (fw < 1) {
+        if ((trw / fw) > (trh / fh)) {
+            w = trh * small;
+            h = trh;
+        } else {
+            w = trw;
+            h = trw / small;
+        }
+    } else if (fw != fh) {
+        if ((trw / fw) > (trh / fh)) {
+            w = trh / small;
+            h = trh;
+        } else {
+            w = trw;
+            h = trw * small;
+        }
+    } else {
+        w = trw;
+        h = trh;
+    }
+    fz_point tmp = fz_make_point((trect.x0 + trect.x1) / 2,
+                                 (trect.y0 + trect.y1) / 2);
+    fz_matrix mat = fz_make_matrix(1, 0, 0, 1, -0.5, -0.5);
+    mat = fz_concat(mat, rot);
+    mat = fz_concat(mat, fz_scale(w, h));
+    mat = fz_concat(mat, fz_translate(tmp.x, tmp.y));
+    return mat;
+}
+
+
 //-----------------------------------------------------------------------------
 // dummy structure for various tools and utilities
 //-----------------------------------------------------------------------------
@@ -12477,127 +12534,150 @@ SWIGINTERN PyObject *Page__show_pdf_page(struct Page *self,struct Page *fz_srcpa
             }
             return Py_BuildValue("i", rc_xref);
         }
-SWIGINTERN PyObject *Page__insertImage(struct Page *self,char const *filename,struct Pixmap *pixmap,PyObject *stream,PyObject *imask,int overlay,int oc,int xref,int alpha,PyObject *matrix,char const *_imgname,PyObject *_imgpointer){
+SWIGINTERN PyObject *Page__insert_image(struct Page *self,char *filename,struct Pixmap *pixmap,PyObject *stream,PyObject *imask,PyObject *clip,int overlay,int rotate,int keep_proportion,int oc,int width,int height,int xref,int alpha,char const *_imgname,PyObject *digests){
             pdf_page *page = pdf_page_from_fz_page(gctx, (fz_page *) self);
-            pdf_document *pdf;
+            pdf_document *pdf = page->doc;
+            float w = width, h = height;
             fz_pixmap *pm = NULL;
             fz_pixmap *pix = NULL;
             fz_image *mask = NULL, *zimg = NULL, *image = NULL, *freethis = NULL;
-            fz_separations *seps = NULL;
             pdf_obj *resources, *xobject, *ref;
             fz_buffer *nres = NULL,  *imgbuf = NULL, *maskbuf = NULL;
-            fz_matrix mat = JM_matrix_from_py(matrix); // pre-calculated
             fz_compressed_buffer *cbuf1 = NULL;
-            int img_xref = 0;
-            int xres, yres, w, h, bpc;
+            int xres, yres, bpc, img_xref = xref, rc_digest = 0;
+            unsigned char digest[16];
+            PyObject *md5_py = NULL, *temp;
             const char *template = "\nq\n%g %g %g %g %g %g cm\n/%s Do\nQ\n";
+
             fz_try(gctx) {
                 if (xref > 0) {
-                    goto image_exists;
-                }
-                //-------------------------------------------------------------
-                // create the image
-                //-------------------------------------------------------------
-                if (filename || EXISTS(stream) || EXISTS(_imgpointer)) {
-                    if (filename) {
-                        image = fz_new_image_from_file(gctx, filename);
-                    } else if (EXISTS(stream)) {
-                        imgbuf = JM_BufferFromBytes(gctx, stream);
-                        image = fz_new_image_from_buffer(gctx, imgbuf);
-                    } else {  // fz_image pointer has been handed in
-                        image = (fz_image *)PyLong_AsVoidPtr(_imgpointer);
+                    ref = pdf_new_indirect(gctx, pdf, xref, 0);
+                    w = pdf_to_int(gctx,
+                        pdf_dict_geta(gctx, ref,
+                        PDF_NAME(Width), PDF_NAME(W)));
+                    h = pdf_to_int(gctx,
+                        pdf_dict_geta(gctx, ref,
+                        PDF_NAME(Height), PDF_NAME(H)));
+                    if ((w + h) == 0) {
+                        THROWMSG(gctx, "xref is no image");
                     }
-                    w = image->w;
-                    h = image->h;
-                    bpc = image->bpc;
-                    fz_colorspace *colorspace = image->colorspace;
-                    fz_image_resolution(image, &xres, &yres);
-                    if (EXISTS(imask)) {
-                        cbuf1 = fz_compressed_image_buffer(gctx, image);
-                        if (!cbuf1) THROWMSG(gctx, "cannot mask uncompressed image");
-                        maskbuf = JM_BufferFromBytes(gctx, imask);
-                        mask = fz_new_image_from_buffer(gctx, maskbuf);
-                        zimg = fz_new_image_from_compressed_buffer(gctx, w, h,
-                                    bpc, colorspace, xres, yres, 1, 0, NULL,
-                                    NULL, cbuf1, mask);
-                        zimg->xres = xres;
-                        zimg->yres = yres;
-                        freethis = image;
-                        image = zimg;
-                        zimg = NULL;
-                    } else if (alpha == 1) {
-                            // have alpha: create an SMask
-                            pix = fz_get_pixmap_from_image(gctx, image, NULL, NULL, 0, 0);
-                            pix->xres = xres;
-                            pix->yres = yres;
-                            pm = fz_convert_pixmap(gctx, pix, NULL, NULL, NULL, fz_default_color_params, 1);
-                            pm->alpha = 0;
-                            pm->colorspace = NULL; //fz_keep_colorspace(gctx, fz_device_gray(gctx));
-                            pm->xres = xres;
-                            pm->yres = yres;
-                            mask = fz_new_image_from_pixmap(gctx, pm, NULL);
-                            mask->xres = xres;
-                            mask->yres = yres;
-                            zimg = fz_new_image_from_pixmap(gctx, pix, mask);
-                            zimg->xres = xres;
-                            zimg->yres = yres;
-                            fz_drop_image(gctx, image);
-                            image = zimg;
-                            zimg = NULL;
-                    }
-                } else {  // pixmap specified
-                    fz_pixmap *arg_pix = (fz_pixmap *) pixmap;
-                    xres = arg_pix->xres;
-                    yres = arg_pix->yres;
-                    if (arg_pix->alpha == 0) {
-                        image = fz_new_image_from_pixmap(gctx, arg_pix, NULL);
-                    } else {  // pixmap has alpha: create an SMask
-                        pm = fz_convert_pixmap(gctx, arg_pix, NULL, NULL, NULL, fz_default_color_params, 1);
-                        pm->xres = xres;
-                        pm->yres = yres;
-                        pm->alpha = 0;
-                        pm->colorspace = NULL; //fz_keep_colorspace(gctx, fz_device_gray(gctx));
-                        mask = fz_new_image_from_pixmap(gctx, pm, NULL);
-                        mask->xres = xres;
-                        mask->yres = yres;
-                        image = fz_new_image_from_pixmap(gctx, arg_pix, mask);
-                        image->xres = xres;
-                        image->yres = yres;
-                    }
+                    goto have_xref;
                 }
-
-                //-------------------------------------------------------------
-                // image created - now put it in the PDF
-                //-------------------------------------------------------------
-                image_exists:;
-                pdf = page->doc;  // owning PDF
-
-                // get /Resources, /XObject
-                resources = pdf_dict_get_inheritable(gctx, page->obj, PDF_NAME(Resources));
-                xobject = pdf_dict_get(gctx, resources, PDF_NAME(XObject));
-                if (!xobject) {  // has no XObject yet, create one
-                    xobject = pdf_dict_put_dict(gctx, resources, PDF_NAME(XObject), 5);
+                if (EXISTS(stream)) {
+                    imgbuf = JM_BufferFromBytes(gctx, stream);
+                    goto have_stream;
                 }
-                if (xref > 0) {
-                    ref = pdf_new_indirect(gctx, page->doc, xref, 0);
-                    img_xref = xref;
+                if (filename) {
+                    imgbuf = fz_read_file(gctx, filename);
+                    goto have_stream;
+                }
+            // process pixmap ---------------------------------
+                fz_pixmap *arg_pix = (fz_pixmap *) pixmap;
+                w = arg_pix->w;
+                h = arg_pix->h;
+                fz_md5_pixmap(gctx, arg_pix, digest);
+                md5_py = PyBytes_FromStringAndSize(digest, 16);
+                temp = PyDict_GetItem(digests, md5_py);
+                if (temp) {
+                    img_xref = (int) PyLong_AsLong(temp);
+                    ref = pdf_new_indirect(gctx, page->doc, img_xref, 0);
+                    goto have_xref;
+                }
+                if (arg_pix->alpha == 0) {
+                    image = fz_new_image_from_pixmap(gctx, arg_pix, NULL);
                 } else {
-                    ref = pdf_add_image(gctx, pdf, image);
-                    img_xref = pdf_to_num(gctx, ref);
+                    pm = fz_convert_pixmap(gctx, arg_pix, NULL, NULL, NULL,
+                            fz_default_color_params, 1);
+                    pm->alpha = 0;
+                    pm->colorspace = NULL;
+                    mask = fz_new_image_from_pixmap(gctx, pm, NULL);
+                    image = fz_new_image_from_pixmap(gctx, arg_pix, mask);
                 }
-                if (oc && xref == 0) {
+                goto have_image;
+
+            // process stream ---------------------------------
+            have_stream:;
+                fz_md5_buffer(gctx, imgbuf, digest);
+                md5_py = PyBytes_FromStringAndSize(digest, 16);
+                temp = PyDict_GetItem(digests, md5_py);
+                if (temp) {
+                    img_xref = (int) PyLong_AsLong(temp);
+                    ref = pdf_new_indirect(gctx, page->doc, img_xref, 0);
+                    w = pdf_to_int(gctx,
+                        pdf_dict_geta(gctx, ref,
+                        PDF_NAME(Width), PDF_NAME(W)));
+                    h = pdf_to_int(gctx,
+                        pdf_dict_geta(gctx, ref,
+                        PDF_NAME(Height), PDF_NAME(H)));
+                    goto have_xref;
+                }
+                image = fz_new_image_from_buffer(gctx, imgbuf);
+                w = image->w;
+                h = image->h;
+                if (EXISTS(imask)) {
+                    goto have_imask;
+                }
+                if (alpha==0) {
+                    goto have_image;
+                }
+                pix = fz_get_pixmap_from_image(gctx, image, NULL, NULL, 0, 0);
+                if (!pix->alpha) {
+                    goto have_image;
+                }
+                pix = fz_get_pixmap_from_image(gctx, image, NULL, NULL, 0, 0);
+                pm = fz_convert_pixmap(gctx, pix, NULL, NULL, NULL,
+                            fz_default_color_params, 1);
+                pm->alpha = 0;
+                pm->colorspace = NULL;
+                mask = fz_new_image_from_pixmap(gctx, pm, NULL);
+                zimg = fz_new_image_from_pixmap(gctx, pix, mask);
+                fz_drop_image(gctx, image);
+                image = zimg;
+                zimg = NULL;
+                goto have_image;
+
+            have_imask:;
+                cbuf1 = fz_compressed_image_buffer(gctx, image);
+                if (!cbuf1) THROWMSG(gctx, "cannot mask uncompressed image");
+                bpc = image->bpc;
+                fz_colorspace *colorspace = image->colorspace;
+                fz_image_resolution(image, &xres, &yres);
+                maskbuf = JM_BufferFromBytes(gctx, imask);
+                mask = fz_new_image_from_buffer(gctx, maskbuf);
+                zimg = fz_new_image_from_compressed_buffer(gctx, w, h,
+                            bpc, colorspace, xres, yres, 1, 0, NULL,
+                            NULL, cbuf1, mask);
+                freethis = image;
+                image = zimg;
+                zimg = NULL;
+                goto have_image;
+
+            have_image:;
+                ref =  pdf_add_image(gctx, pdf, image);
+                if (oc) {
                     JM_add_oc_object(gctx, pdf, ref, oc);
                 }
-
-                pdf_dict_puts_drop(gctx, xobject, _imgname, ref);  // update XObject
-                // make contents stream that invokes the image
+                img_xref = pdf_to_num(gctx, ref);
+                DICT_SETITEM_DROP(digests, md5_py, Py_BuildValue("i", img_xref));
+                rc_digest = 1;
+            have_xref:;
+                resources = pdf_dict_get_inheritable(gctx, page->obj,
+                                PDF_NAME(Resources));
+                if (!resources) {
+                    resources = pdf_dict_put_dict(gctx, page->obj,
+                                    PDF_NAME(Resources), 2);
+                }
+                xobject = pdf_dict_get(gctx, resources, PDF_NAME(XObject));
+                if (!xobject) {
+                    xobject = pdf_dict_put_dict(gctx, resources,
+                                  PDF_NAME(XObject), 2);
+                }
+                fz_matrix mat = calc_image_matrix(w, h, clip, rotate, keep_proportion);
+                pdf_dict_puts_drop(gctx, xobject, _imgname, ref);
                 nres = fz_new_buffer(gctx, 50);
                 fz_append_printf(gctx, nres, template,
-                                 mat.a, mat.b, mat.c, mat.d, mat.e, mat.f,
-                                 _imgname);
+                                 mat.a, mat.b, mat.c, mat.d, mat.e, mat.f, _imgname);
                 JM_insert_contents(gctx, pdf, page->obj, nres, overlay);
-                fz_drop_buffer(gctx, nres);
-                nres = NULL;
             }
             fz_always(gctx) {
                 if (freethis) {
@@ -12616,8 +12696,12 @@ SWIGINTERN PyObject *Page__insertImage(struct Page *self,char const *filename,st
             fz_catch(gctx) {
                 return NULL;
             }
-            pdf->dirty = 1;
-            return Py_BuildValue("i", img_xref);
+
+            if (rc_digest) {
+                return Py_BuildValue("iO", img_xref, digests);
+            } else {
+                return Py_BuildValue("iO", img_xref, Py_None);
+            }
         }
 SWIGINTERN PyObject *Page_refresh(struct Page *self){
             pdf_page *page = pdf_page_from_fz_page(gctx, (fz_page *) self);
@@ -12897,19 +12981,27 @@ SWIGINTERN void Pixmap_shrink(struct Pixmap *self,int factor){
             }
             fz_subsample_pixmap(gctx, (fz_pixmap *) self, factor);
         }
-SWIGINTERN void Pixmap_tintWith(struct Pixmap *self,int black,int white){
+SWIGINTERN void Pixmap_gamma_with(struct Pixmap *self,float gamma){
+            if (!fz_pixmap_colorspace(gctx, (fz_pixmap *) self))
+            {
+                JM_Warning("colorspace invalid for function");
+                return;
+            }
+            fz_gamma_pixmap(gctx, (fz_pixmap *) self, gamma);
+        }
+SWIGINTERN void Pixmap_tint_with(struct Pixmap *self,int black,int white){
             fz_tint_pixmap(gctx, (fz_pixmap *) self, black, white);
         }
-SWIGINTERN void Pixmap_clearWith__SWIG_0(struct Pixmap *self){
+SWIGINTERN void Pixmap_clear_with__SWIG_0(struct Pixmap *self){
             fz_clear_pixmap(gctx, (fz_pixmap *) self);
         }
-SWIGINTERN void Pixmap_clearWith__SWIG_1(struct Pixmap *self,int value){
+SWIGINTERN void Pixmap_clear_with__SWIG_1(struct Pixmap *self,int value){
             fz_clear_pixmap_with_value(gctx, (fz_pixmap *) self, value);
         }
-SWIGINTERN void Pixmap_clearWith__SWIG_2(struct Pixmap *self,int value,PyObject *bbox){
+SWIGINTERN void Pixmap_clear_with__SWIG_2(struct Pixmap *self,int value,PyObject *bbox){
             JM_clear_pixmap_rect_with_value(gctx, (fz_pixmap *) self, value, JM_irect_from_py(bbox));
         }
-SWIGINTERN PyObject *Pixmap_copyPixmap(struct Pixmap *self,struct Pixmap *src,PyObject *bbox){
+SWIGINTERN PyObject *Pixmap_copy(struct Pixmap *self,struct Pixmap *src,PyObject *bbox){
             fz_try(gctx) {
                 fz_pixmap *pm = (fz_pixmap *) self, *src_pix = (fz_pixmap *) src;
                 if (!fz_pixmap_colorspace(gctx, src_pix))
@@ -12923,7 +13015,7 @@ SWIGINTERN PyObject *Pixmap_copyPixmap(struct Pixmap *self,struct Pixmap *src,Py
             }
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap_setAlpha(struct Pixmap *self,PyObject *alphavalues,int premultiply,PyObject *opaque){
+SWIGINTERN PyObject *Pixmap_set_alpha(struct Pixmap *self,PyObject *alphavalues,int premultiply,PyObject *opaque){
             fz_buffer *res = NULL;
             fz_pixmap *pix = (fz_pixmap *) self;
             int divisor = 255;
@@ -12995,7 +13087,7 @@ SWIGINTERN PyObject *Pixmap_setAlpha(struct Pixmap *self,PyObject *alphavalues,i
             }
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap__getImageData(struct Pixmap *self,int format){
+SWIGINTERN PyObject *Pixmap__tobytes(struct Pixmap *self,int format){
             fz_output *out = NULL;
             fz_buffer *res = NULL;
             PyObject *barray = NULL;
@@ -13066,7 +13158,7 @@ SWIGINTERN PyObject *Pixmap__writeIMG(struct Pixmap *self,char *filename,int for
             }
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap_invertIRect(struct Pixmap *self,PyObject *bbox){
+SWIGINTERN PyObject *Pixmap_invert_irect(struct Pixmap *self,PyObject *bbox){
             fz_pixmap *pm = (fz_pixmap *) self;
             if (!fz_pixmap_colorspace(gctx, pm))
                 {
@@ -13099,7 +13191,7 @@ SWIGINTERN PyObject *Pixmap_pixel(struct Pixmap *self,int x,int y){
             }
             return p;
         }
-SWIGINTERN PyObject *Pixmap_setPixel(struct Pixmap *self,int x,int y,PyObject *color){
+SWIGINTERN PyObject *Pixmap_set_pixel(struct Pixmap *self,int x,int y,PyObject *color){
             fz_try(gctx) {
                 fz_pixmap *pm = (fz_pixmap *) self;
                 if (!INRANGE(x, 0, pm->w - 1) || !INRANGE(y, 0, pm->h - 1))
@@ -13128,19 +13220,19 @@ SWIGINTERN PyObject *Pixmap_setPixel(struct Pixmap *self,int x,int y,PyObject *c
             }
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap_setOrigin(struct Pixmap *self,int x,int y){
+SWIGINTERN PyObject *Pixmap_set_origin(struct Pixmap *self,int x,int y){
             fz_pixmap *pm = (fz_pixmap *) self;
             pm->x = x;
             pm->y = y;
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap_setResolution(struct Pixmap *self,int xres,int yres){
+SWIGINTERN PyObject *Pixmap_set_dpi(struct Pixmap *self,int xres,int yres){
             fz_pixmap *pm = (fz_pixmap *) self;
             pm->xres = xres;
             pm->yres = yres;
             Py_RETURN_NONE;
         }
-SWIGINTERN PyObject *Pixmap_setRect(struct Pixmap *self,PyObject *bbox,PyObject *color){
+SWIGINTERN PyObject *Pixmap_set_rect(struct Pixmap *self,PyObject *bbox,PyObject *color){
             PyObject *rc = NULL;
             fz_try(gctx) {
                 fz_pixmap *pm = (fz_pixmap *) self;
@@ -13171,7 +13263,7 @@ SWIGINTERN PyObject *Pixmap_is_monochrome(struct Pixmap *self){
 SWIGINTERN PyObject *Pixmap_digest(struct Pixmap *self){
             unsigned char digest[16];
             fz_md5_pixmap(gctx, (fz_pixmap *) self, digest);
-            return PyBytes_FromStringAndSize(digest,16);
+            return PyBytes_FromStringAndSize(digest, 16);
         }
 SWIGINTERN PyObject *Pixmap_stride(struct Pixmap *self){
             return PyLong_FromSize_t((size_t) fz_pixmap_stride(gctx, (fz_pixmap *) self));
@@ -20779,20 +20871,24 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Page__insertImage(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Page__insert_image(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Page *arg1 = (struct Page *) 0 ;
   char *arg2 = (char *) NULL ;
   struct Pixmap *arg3 = (struct Pixmap *) NULL ;
   PyObject *arg4 = (PyObject *) NULL ;
   PyObject *arg5 = (PyObject *) NULL ;
-  int arg6 = (int) 1 ;
-  int arg7 = (int) 0 ;
+  PyObject *arg6 = (PyObject *) NULL ;
+  int arg7 = (int) 1 ;
   int arg8 = (int) 0 ;
-  int arg9 = (int) 0 ;
-  PyObject *arg10 = (PyObject *) NULL ;
-  char *arg11 = (char *) NULL ;
-  PyObject *arg12 = (PyObject *) NULL ;
+  int arg9 = (int) 1 ;
+  int arg10 = (int) 0 ;
+  int arg11 = (int) 0 ;
+  int arg12 = (int) 0 ;
+  int arg13 = (int) 0 ;
+  int arg14 = (int) -1 ;
+  char *arg15 = (char *) NULL ;
+  PyObject *arg16 = (PyObject *) NULL ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   int res2 ;
@@ -20800,37 +20896,45 @@ SWIGINTERN PyObject *_wrap_Page__insertImage(PyObject *SWIGUNUSEDPARM(self), PyO
   int alloc2 = 0 ;
   void *argp3 = 0 ;
   int res3 = 0 ;
-  int val6 ;
-  int ecode6 = 0 ;
   int val7 ;
   int ecode7 = 0 ;
   int val8 ;
   int ecode8 = 0 ;
   int val9 ;
   int ecode9 = 0 ;
-  int res11 ;
-  char *buf11 = 0 ;
-  int alloc11 = 0 ;
-  PyObject *swig_obj[12] ;
+  int val10 ;
+  int ecode10 = 0 ;
+  int val11 ;
+  int ecode11 = 0 ;
+  int val12 ;
+  int ecode12 = 0 ;
+  int val13 ;
+  int ecode13 = 0 ;
+  int val14 ;
+  int ecode14 = 0 ;
+  int res15 ;
+  char *buf15 = 0 ;
+  int alloc15 = 0 ;
+  PyObject *swig_obj[16] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Page__insertImage", 1, 12, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Page__insert_image", 1, 16, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Page, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Page__insertImage" "', argument " "1"" of type '" "struct Page *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Page__insert_image" "', argument " "1"" of type '" "struct Page *""'"); 
   }
   arg1 = (struct Page *)(argp1);
   if (swig_obj[1]) {
     res2 = SWIG_AsCharPtrAndSize(swig_obj[1], &buf2, NULL, &alloc2);
     if (!SWIG_IsOK(res2)) {
-      SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "Page__insertImage" "', argument " "2"" of type '" "char const *""'");
+      SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "Page__insert_image" "', argument " "2"" of type '" "char *""'");
     }
     arg2 = (char *)(buf2);
   }
   if (swig_obj[2]) {
     res3 = SWIG_ConvertPtr(swig_obj[2], &argp3,SWIGTYPE_p_Pixmap, 0 |  0 );
     if (!SWIG_IsOK(res3)) {
-      SWIG_exception_fail(SWIG_ArgError(res3), "in method '" "Page__insertImage" "', argument " "3"" of type '" "struct Pixmap *""'"); 
+      SWIG_exception_fail(SWIG_ArgError(res3), "in method '" "Page__insert_image" "', argument " "3"" of type '" "struct Pixmap *""'"); 
     }
     arg3 = (struct Pixmap *)(argp3);
   }
@@ -20841,59 +20945,87 @@ SWIGINTERN PyObject *_wrap_Page__insertImage(PyObject *SWIGUNUSEDPARM(self), PyO
     arg5 = swig_obj[4];
   }
   if (swig_obj[5]) {
-    ecode6 = SWIG_AsVal_int(swig_obj[5], &val6);
-    if (!SWIG_IsOK(ecode6)) {
-      SWIG_exception_fail(SWIG_ArgError(ecode6), "in method '" "Page__insertImage" "', argument " "6"" of type '" "int""'");
-    } 
-    arg6 = (int)(val6);
+    arg6 = swig_obj[5];
   }
   if (swig_obj[6]) {
     ecode7 = SWIG_AsVal_int(swig_obj[6], &val7);
     if (!SWIG_IsOK(ecode7)) {
-      SWIG_exception_fail(SWIG_ArgError(ecode7), "in method '" "Page__insertImage" "', argument " "7"" of type '" "int""'");
+      SWIG_exception_fail(SWIG_ArgError(ecode7), "in method '" "Page__insert_image" "', argument " "7"" of type '" "int""'");
     } 
     arg7 = (int)(val7);
   }
   if (swig_obj[7]) {
     ecode8 = SWIG_AsVal_int(swig_obj[7], &val8);
     if (!SWIG_IsOK(ecode8)) {
-      SWIG_exception_fail(SWIG_ArgError(ecode8), "in method '" "Page__insertImage" "', argument " "8"" of type '" "int""'");
+      SWIG_exception_fail(SWIG_ArgError(ecode8), "in method '" "Page__insert_image" "', argument " "8"" of type '" "int""'");
     } 
     arg8 = (int)(val8);
   }
   if (swig_obj[8]) {
     ecode9 = SWIG_AsVal_int(swig_obj[8], &val9);
     if (!SWIG_IsOK(ecode9)) {
-      SWIG_exception_fail(SWIG_ArgError(ecode9), "in method '" "Page__insertImage" "', argument " "9"" of type '" "int""'");
+      SWIG_exception_fail(SWIG_ArgError(ecode9), "in method '" "Page__insert_image" "', argument " "9"" of type '" "int""'");
     } 
     arg9 = (int)(val9);
   }
   if (swig_obj[9]) {
-    arg10 = swig_obj[9];
+    ecode10 = SWIG_AsVal_int(swig_obj[9], &val10);
+    if (!SWIG_IsOK(ecode10)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode10), "in method '" "Page__insert_image" "', argument " "10"" of type '" "int""'");
+    } 
+    arg10 = (int)(val10);
   }
   if (swig_obj[10]) {
-    res11 = SWIG_AsCharPtrAndSize(swig_obj[10], &buf11, NULL, &alloc11);
-    if (!SWIG_IsOK(res11)) {
-      SWIG_exception_fail(SWIG_ArgError(res11), "in method '" "Page__insertImage" "', argument " "11"" of type '" "char const *""'");
-    }
-    arg11 = (char *)(buf11);
+    ecode11 = SWIG_AsVal_int(swig_obj[10], &val11);
+    if (!SWIG_IsOK(ecode11)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode11), "in method '" "Page__insert_image" "', argument " "11"" of type '" "int""'");
+    } 
+    arg11 = (int)(val11);
   }
   if (swig_obj[11]) {
-    arg12 = swig_obj[11];
+    ecode12 = SWIG_AsVal_int(swig_obj[11], &val12);
+    if (!SWIG_IsOK(ecode12)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode12), "in method '" "Page__insert_image" "', argument " "12"" of type '" "int""'");
+    } 
+    arg12 = (int)(val12);
+  }
+  if (swig_obj[12]) {
+    ecode13 = SWIG_AsVal_int(swig_obj[12], &val13);
+    if (!SWIG_IsOK(ecode13)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode13), "in method '" "Page__insert_image" "', argument " "13"" of type '" "int""'");
+    } 
+    arg13 = (int)(val13);
+  }
+  if (swig_obj[13]) {
+    ecode14 = SWIG_AsVal_int(swig_obj[13], &val14);
+    if (!SWIG_IsOK(ecode14)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode14), "in method '" "Page__insert_image" "', argument " "14"" of type '" "int""'");
+    } 
+    arg14 = (int)(val14);
+  }
+  if (swig_obj[14]) {
+    res15 = SWIG_AsCharPtrAndSize(swig_obj[14], &buf15, NULL, &alloc15);
+    if (!SWIG_IsOK(res15)) {
+      SWIG_exception_fail(SWIG_ArgError(res15), "in method '" "Page__insert_image" "', argument " "15"" of type '" "char const *""'");
+    }
+    arg15 = (char *)(buf15);
+  }
+  if (swig_obj[15]) {
+    arg16 = swig_obj[15];
   }
   {
-    result = (PyObject *)Page__insertImage(arg1,(char const *)arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,(char const *)arg11,arg12);
+    result = (PyObject *)Page__insert_image(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14,(char const *)arg15,arg16);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
   }
   resultobj = result;
   if (alloc2 == SWIG_NEWOBJ) free((char*)buf2);
-  if (alloc11 == SWIG_NEWOBJ) free((char*)buf11);
+  if (alloc15 == SWIG_NEWOBJ) free((char*)buf15);
   return resultobj;
 fail:
   if (alloc2 == SWIG_NEWOBJ) free((char*)buf2);
-  if (alloc11 == SWIG_NEWOBJ) free((char*)buf11);
+  if (alloc15 == SWIG_NEWOBJ) free((char*)buf15);
   return NULL;
 }
 
@@ -21565,7 +21697,36 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_tintWith(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_gamma_with(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  struct Pixmap *arg1 = (struct Pixmap *) 0 ;
+  float arg2 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+  float val2 ;
+  int ecode2 = 0 ;
+  PyObject *swig_obj[2] ;
+  
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_gamma_with", 2, 2, swig_obj)) SWIG_fail;
+  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_gamma_with" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+  }
+  arg1 = (struct Pixmap *)(argp1);
+  ecode2 = SWIG_AsVal_float(swig_obj[1], &val2);
+  if (!SWIG_IsOK(ecode2)) {
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_gamma_with" "', argument " "2"" of type '" "float""'");
+  } 
+  arg2 = (float)(val2);
+  Pixmap_gamma_with(arg1,arg2);
+  resultobj = SWIG_Py_Void();
+  return resultobj;
+fail:
+  return NULL;
+}
+
+
+SWIGINTERN PyObject *_wrap_Pixmap_tint_with(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -21578,23 +21739,23 @@ SWIGINTERN PyObject *_wrap_Pixmap_tintWith(PyObject *SWIGUNUSEDPARM(self), PyObj
   int ecode3 = 0 ;
   PyObject *swig_obj[3] ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_tintWith", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_tint_with", 3, 3, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_tintWith" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_tint_with" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_tintWith" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_tint_with" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
   if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_tintWith" "', argument " "3"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_tint_with" "', argument " "3"" of type '" "int""'");
   } 
   arg3 = (int)(val3);
-  Pixmap_tintWith(arg1,arg2,arg3);
+  Pixmap_tint_with(arg1,arg2,arg3);
   resultobj = SWIG_Py_Void();
   return resultobj;
 fail:
@@ -21602,7 +21763,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_0(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
+SWIGINTERN PyObject *_wrap_Pixmap_clear_with__SWIG_0(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   void *argp1 = 0 ;
@@ -21611,10 +21772,10 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_0(PyObject *SWIGUNUSEDPARM(sel
   if ((nobjs < 1) || (nobjs > 1)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clearWith" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clear_with" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
-  Pixmap_clearWith__SWIG_0(arg1);
+  Pixmap_clear_with__SWIG_0(arg1);
   resultobj = SWIG_Py_Void();
   return resultobj;
 fail:
@@ -21622,7 +21783,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_1(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
+SWIGINTERN PyObject *_wrap_Pixmap_clear_with__SWIG_1(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -21634,15 +21795,15 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_1(PyObject *SWIGUNUSEDPARM(sel
   if ((nobjs < 2) || (nobjs > 2)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clearWith" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clear_with" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_clearWith" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_clear_with" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
-  Pixmap_clearWith__SWIG_1(arg1,arg2);
+  Pixmap_clear_with__SWIG_1(arg1,arg2);
   resultobj = SWIG_Py_Void();
   return resultobj;
 fail:
@@ -21650,7 +21811,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_2(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
+SWIGINTERN PyObject *_wrap_Pixmap_clear_with__SWIG_2(PyObject *SWIGUNUSEDPARM(self), Py_ssize_t nobjs, PyObject **swig_obj) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -21663,16 +21824,16 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith__SWIG_2(PyObject *SWIGUNUSEDPARM(sel
   if ((nobjs < 3) || (nobjs > 3)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clearWith" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_clear_with" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_clearWith" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_clear_with" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   arg3 = swig_obj[2];
-  Pixmap_clearWith__SWIG_2(arg1,arg2,arg3);
+  Pixmap_clear_with__SWIG_2(arg1,arg2,arg3);
   resultobj = SWIG_Py_Void();
   return resultobj;
 fail:
@@ -21680,13 +21841,13 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_clearWith(PyObject *self, PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_clear_with(PyObject *self, PyObject *args) {
   Py_ssize_t argc;
   PyObject *argv[4] = {
     0
   };
   
-  if (!(argc = SWIG_Python_UnpackTuple(args, "Pixmap_clearWith", 0, 3, argv))) SWIG_fail;
+  if (!(argc = SWIG_Python_UnpackTuple(args, "Pixmap_clear_with", 0, 3, argv))) SWIG_fail;
   --argc;
   if (argc == 1) {
     int _v;
@@ -21694,7 +21855,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith(PyObject *self, PyObject *args) {
     int res = SWIG_ConvertPtr(argv[0], &vptr, SWIGTYPE_p_Pixmap, 0);
     _v = SWIG_CheckState(res);
     if (_v) {
-      return _wrap_Pixmap_clearWith__SWIG_0(self, argc, argv);
+      return _wrap_Pixmap_clear_with__SWIG_0(self, argc, argv);
     }
   }
   if (argc == 2) {
@@ -21708,7 +21869,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith(PyObject *self, PyObject *args) {
         _v = SWIG_CheckState(res);
       }
       if (_v) {
-        return _wrap_Pixmap_clearWith__SWIG_1(self, argc, argv);
+        return _wrap_Pixmap_clear_with__SWIG_1(self, argc, argv);
       }
     }
   }
@@ -21725,23 +21886,23 @@ SWIGINTERN PyObject *_wrap_Pixmap_clearWith(PyObject *self, PyObject *args) {
       if (_v) {
         _v = (argv[2] != 0);
         if (_v) {
-          return _wrap_Pixmap_clearWith__SWIG_2(self, argc, argv);
+          return _wrap_Pixmap_clear_with__SWIG_2(self, argc, argv);
         }
       }
     }
   }
   
 fail:
-  SWIG_Python_RaiseOrModifyTypeError("Wrong number or type of arguments for overloaded function 'Pixmap_clearWith'.\n"
+  SWIG_Python_RaiseOrModifyTypeError("Wrong number or type of arguments for overloaded function 'Pixmap_clear_with'.\n"
     "  Possible C/C++ prototypes are:\n"
-    "    Pixmap::clearWith()\n"
-    "    Pixmap::clearWith(int)\n"
-    "    Pixmap::clearWith(int,PyObject *)\n");
+    "    Pixmap::clear_with()\n"
+    "    Pixmap::clear_with(int)\n"
+    "    Pixmap::clear_with(int,PyObject *)\n");
   return 0;
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_copyPixmap(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_copy(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   struct Pixmap *arg2 = (struct Pixmap *) 0 ;
@@ -21753,20 +21914,20 @@ SWIGINTERN PyObject *_wrap_Pixmap_copyPixmap(PyObject *SWIGUNUSEDPARM(self), PyO
   PyObject *swig_obj[3] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_copyPixmap", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_copy", 3, 3, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_copyPixmap" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_copy" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   res2 = SWIG_ConvertPtr(swig_obj[1], &argp2,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res2)) {
-    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "Pixmap_copyPixmap" "', argument " "2"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "Pixmap_copy" "', argument " "2"" of type '" "struct Pixmap *""'"); 
   }
   arg2 = (struct Pixmap *)(argp2);
   arg3 = swig_obj[2];
   {
-    result = (PyObject *)Pixmap_copyPixmap(arg1,arg2,arg3);
+    result = (PyObject *)Pixmap_copy(arg1,arg2,arg3);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -21778,7 +21939,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_setAlpha(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_set_alpha(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   PyObject *arg2 = (PyObject *) NULL ;
@@ -21791,10 +21952,10 @@ SWIGINTERN PyObject *_wrap_Pixmap_setAlpha(PyObject *SWIGUNUSEDPARM(self), PyObj
   PyObject *swig_obj[4] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_setAlpha", 1, 4, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_set_alpha", 1, 4, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_setAlpha" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_set_alpha" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   if (swig_obj[1]) {
@@ -21803,7 +21964,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_setAlpha(PyObject *SWIGUNUSEDPARM(self), PyObj
   if (swig_obj[2]) {
     ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
     if (!SWIG_IsOK(ecode3)) {
-      SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_setAlpha" "', argument " "3"" of type '" "int""'");
+      SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_set_alpha" "', argument " "3"" of type '" "int""'");
     } 
     arg3 = (int)(val3);
   }
@@ -21811,7 +21972,7 @@ SWIGINTERN PyObject *_wrap_Pixmap_setAlpha(PyObject *SWIGUNUSEDPARM(self), PyObj
     arg4 = swig_obj[3];
   }
   {
-    result = (PyObject *)Pixmap_setAlpha(arg1,arg2,arg3,arg4);
+    result = (PyObject *)Pixmap_set_alpha(arg1,arg2,arg3,arg4);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -21823,7 +21984,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap__getImageData(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap__tobytes(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -21834,19 +21995,19 @@ SWIGINTERN PyObject *_wrap_Pixmap__getImageData(PyObject *SWIGUNUSEDPARM(self), 
   PyObject *swig_obj[2] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap__getImageData", 2, 2, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap__tobytes", 2, 2, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap__getImageData" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap__tobytes" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap__getImageData" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap__tobytes" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   {
-    result = (PyObject *)Pixmap__getImageData(arg1,arg2);
+    result = (PyObject *)Pixmap__tobytes(arg1,arg2);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -21904,7 +22065,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_invertIRect(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_invert_irect(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   PyObject *arg2 = (PyObject *) NULL ;
@@ -21913,16 +22074,16 @@ SWIGINTERN PyObject *_wrap_Pixmap_invertIRect(PyObject *SWIGUNUSEDPARM(self), Py
   PyObject *swig_obj[2] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_invertIRect", 1, 2, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_invert_irect", 1, 2, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_invertIRect" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_invert_irect" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   if (swig_obj[1]) {
     arg2 = swig_obj[1];
   }
-  result = (PyObject *)Pixmap_invertIRect(arg1,arg2);
+  result = (PyObject *)Pixmap_invert_irect(arg1,arg2);
   resultobj = result;
   return resultobj;
 fail:
@@ -21973,7 +22134,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_setPixel(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_set_pixel(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -21988,25 +22149,25 @@ SWIGINTERN PyObject *_wrap_Pixmap_setPixel(PyObject *SWIGUNUSEDPARM(self), PyObj
   PyObject *swig_obj[4] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_setPixel", 4, 4, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_set_pixel", 4, 4, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_setPixel" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_set_pixel" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_setPixel" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_set_pixel" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
   if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_setPixel" "', argument " "3"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_set_pixel" "', argument " "3"" of type '" "int""'");
   } 
   arg3 = (int)(val3);
   arg4 = swig_obj[3];
   {
-    result = (PyObject *)Pixmap_setPixel(arg1,arg2,arg3,arg4);
+    result = (PyObject *)Pixmap_set_pixel(arg1,arg2,arg3,arg4);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -22018,7 +22179,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_setOrigin(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_set_origin(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -22032,23 +22193,23 @@ SWIGINTERN PyObject *_wrap_Pixmap_setOrigin(PyObject *SWIGUNUSEDPARM(self), PyOb
   PyObject *swig_obj[3] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_setOrigin", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_set_origin", 3, 3, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_setOrigin" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_set_origin" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_setOrigin" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_set_origin" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
   if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_setOrigin" "', argument " "3"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_set_origin" "', argument " "3"" of type '" "int""'");
   } 
   arg3 = (int)(val3);
-  result = (PyObject *)Pixmap_setOrigin(arg1,arg2,arg3);
+  result = (PyObject *)Pixmap_set_origin(arg1,arg2,arg3);
   resultobj = result;
   return resultobj;
 fail:
@@ -22056,7 +22217,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_setResolution(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_set_dpi(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   int arg2 ;
@@ -22070,23 +22231,23 @@ SWIGINTERN PyObject *_wrap_Pixmap_setResolution(PyObject *SWIGUNUSEDPARM(self), 
   PyObject *swig_obj[3] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_setResolution", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_set_dpi", 3, 3, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_setResolution" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_set_dpi" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
   if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_setResolution" "', argument " "2"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Pixmap_set_dpi" "', argument " "2"" of type '" "int""'");
   } 
   arg2 = (int)(val2);
   ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
   if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_setResolution" "', argument " "3"" of type '" "int""'");
+    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Pixmap_set_dpi" "', argument " "3"" of type '" "int""'");
   } 
   arg3 = (int)(val3);
-  result = (PyObject *)Pixmap_setResolution(arg1,arg2,arg3);
+  result = (PyObject *)Pixmap_set_dpi(arg1,arg2,arg3);
   resultobj = result;
   return resultobj;
 fail:
@@ -22094,7 +22255,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Pixmap_setRect(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Pixmap_set_rect(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Pixmap *arg1 = (struct Pixmap *) 0 ;
   PyObject *arg2 = (PyObject *) 0 ;
@@ -22104,16 +22265,16 @@ SWIGINTERN PyObject *_wrap_Pixmap_setRect(PyObject *SWIGUNUSEDPARM(self), PyObje
   PyObject *swig_obj[3] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Pixmap_setRect", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Pixmap_set_rect", 3, 3, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Pixmap, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_setRect" "', argument " "1"" of type '" "struct Pixmap *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Pixmap_set_rect" "', argument " "1"" of type '" "struct Pixmap *""'"); 
   }
   arg1 = (struct Pixmap *)(argp1);
   arg2 = swig_obj[1];
   arg3 = swig_obj[2];
   {
-    result = (PyObject *)Pixmap_setRect(arg1,arg2,arg3);
+    result = (PyObject *)Pixmap_set_rect(arg1,arg2,arg3);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -27736,7 +27897,7 @@ static PyMethodDef SwigMethods[] = {
 	 { "Page__addAnnot_FromString", _wrap_Page__addAnnot_FromString, METH_VARARGS, NULL},
 	 { "Page_clean_contents", _wrap_Page_clean_contents, METH_VARARGS, NULL},
 	 { "Page__show_pdf_page", _wrap_Page__show_pdf_page, METH_VARARGS, NULL},
-	 { "Page__insertImage", _wrap_Page__insertImage, METH_VARARGS, NULL},
+	 { "Page__insert_image", _wrap_Page__insert_image, METH_VARARGS, NULL},
 	 { "Page_refresh", _wrap_Page_refresh, METH_O, NULL},
 	 { "Page__insertFont", _wrap_Page__insertFont, METH_VARARGS, NULL},
 	 { "Page_transformation_matrix", _wrap_Page_transformation_matrix, METH_O, NULL},
@@ -27745,18 +27906,19 @@ static PyMethodDef SwigMethods[] = {
 	 { "delete_Pixmap", _wrap_delete_Pixmap, METH_O, NULL},
 	 { "new_Pixmap", _wrap_new_Pixmap, METH_VARARGS, NULL},
 	 { "Pixmap_shrink", _wrap_Pixmap_shrink, METH_VARARGS, NULL},
-	 { "Pixmap_tintWith", _wrap_Pixmap_tintWith, METH_VARARGS, NULL},
-	 { "Pixmap_clearWith", _wrap_Pixmap_clearWith, METH_VARARGS, NULL},
-	 { "Pixmap_copyPixmap", _wrap_Pixmap_copyPixmap, METH_VARARGS, NULL},
-	 { "Pixmap_setAlpha", _wrap_Pixmap_setAlpha, METH_VARARGS, NULL},
-	 { "Pixmap__getImageData", _wrap_Pixmap__getImageData, METH_VARARGS, NULL},
+	 { "Pixmap_gamma_with", _wrap_Pixmap_gamma_with, METH_VARARGS, NULL},
+	 { "Pixmap_tint_with", _wrap_Pixmap_tint_with, METH_VARARGS, NULL},
+	 { "Pixmap_clear_with", _wrap_Pixmap_clear_with, METH_VARARGS, NULL},
+	 { "Pixmap_copy", _wrap_Pixmap_copy, METH_VARARGS, NULL},
+	 { "Pixmap_set_alpha", _wrap_Pixmap_set_alpha, METH_VARARGS, NULL},
+	 { "Pixmap__tobytes", _wrap_Pixmap__tobytes, METH_VARARGS, NULL},
 	 { "Pixmap__writeIMG", _wrap_Pixmap__writeIMG, METH_VARARGS, NULL},
-	 { "Pixmap_invertIRect", _wrap_Pixmap_invertIRect, METH_VARARGS, NULL},
+	 { "Pixmap_invert_irect", _wrap_Pixmap_invert_irect, METH_VARARGS, NULL},
 	 { "Pixmap_pixel", _wrap_Pixmap_pixel, METH_VARARGS, NULL},
-	 { "Pixmap_setPixel", _wrap_Pixmap_setPixel, METH_VARARGS, NULL},
-	 { "Pixmap_setOrigin", _wrap_Pixmap_setOrigin, METH_VARARGS, NULL},
-	 { "Pixmap_setResolution", _wrap_Pixmap_setResolution, METH_VARARGS, NULL},
-	 { "Pixmap_setRect", _wrap_Pixmap_setRect, METH_VARARGS, NULL},
+	 { "Pixmap_set_pixel", _wrap_Pixmap_set_pixel, METH_VARARGS, NULL},
+	 { "Pixmap_set_origin", _wrap_Pixmap_set_origin, METH_VARARGS, NULL},
+	 { "Pixmap_set_dpi", _wrap_Pixmap_set_dpi, METH_VARARGS, NULL},
+	 { "Pixmap_set_rect", _wrap_Pixmap_set_rect, METH_VARARGS, NULL},
 	 { "Pixmap_is_monochrome", _wrap_Pixmap_is_monochrome, METH_O, NULL},
 	 { "Pixmap_digest", _wrap_Pixmap_digest, METH_O, NULL},
 	 { "Pixmap_stride", _wrap_Pixmap_stride, METH_O, NULL},
