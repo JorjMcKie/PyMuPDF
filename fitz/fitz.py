@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.13"
-VersionDate = "2021-05-03 08:51:54"
-version = (VersionBind, VersionFitz, "20210503085154")
+VersionDate = "2021-05-05 06:32:22"
+version = (VersionBind, VersionFitz, "20210505063222")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -3717,8 +3717,8 @@ class Document(object):
 
         return val
 
-    def _remove_links_to(self, first: int, last: int) -> AnyType:
-        return _fitz.Document__remove_links_to(self, first, last)
+    def _remove_links_to(self, numbers: AnyType) -> AnyType:
+        return _fitz.Document__remove_links_to(self, numbers)
 
     def _loadOutline(self) -> "Outline":
         """Load first outline."""
@@ -4922,35 +4922,66 @@ class Document(object):
             if item[2] == pno + 1:
                 self.del_toc_item(i)
 
-        self._remove_links_to(pno, pno)
+        self._remove_links_to((pno,))
         self._delete_page(pno)
         self._reset_page_refs()
 
-    def delete_pages(self, from_page: int = -1, to_page: int = -1):
-        """Delete pages from a PDF."""
+    def delete_pages(self, *args, **kw):
+        """Delete pages from a PDF.
+
+        Args:
+            Either keywords 'from_page'/'to_page', or two integers to
+            specify the first/last page to delete.
+            Or a list/tuple/range object, which can contain arbitrary
+            page numbers.
+        """
         if not self.is_pdf:
             raise ValueError("not a PDF")
         if self.is_closed:
             raise ValueError("document closed")
 
         page_count = self.page_count  # page count of document
-        f = from_page  # first page to delete
-        t = to_page  # last page to delete
-        while f < 0:
-            f += page_count
-        while t < 0:
-            t += page_count
-        if not f <= t < page_count:
-            raise ValueError("bad page number(s)")
+        f = t = -1
+        if kw:  # check if keywords were used
+            if args != []:  # then no positional args are allowed
+                raise ValueError("cannot mix keyword and positional argument")
+            f = kw.get("from_page", -1)  # first page to delete
+            t = kw.get("to_page", -1)  # last page to delete
+            while f < 0:
+                f += page_count
+            while t < 0:
+                t += page_count
+            if not f <= t < page_count:
+                raise ValueError("bad page number(s)")
+            numbers = tuple(range(f, t + 1))
+        else:
+            if len(args) > 2 or args == []:
+                raise ValueError("need 1 or 2 positional arguments")
+            if len(args) == 2:
+                f, t = args
+                if not (type(f) is int and type(t) is int):
+                    raise ValueError("both arguments must be int")
+                if f > t:
+                    f, t = t, f
+                numbers = tuple(range(f, t + 1))
+            else:
+                r = args[0]
+                if type(r) not in (int, range, list, tuple):
+                    raise ValueError("need int or sequence if one argument")
+                numbers = tuple(r)
 
+        numbers = list(map(int, set(numbers)))  # ensure unique integers
+        numbers.sort()
+        if numbers[0] < 0 or numbers[-1] >= page_count:
+            raise ValueError("bad page number(s)")
         old_toc = self.get_toc()
         for i, item in enumerate(old_toc):
-            if f + 1 <= item[2] <= t + 1:
+            if item[2] - 1 in numbers:  # a deleted page number
                 self.del_toc_item(i)
 
-        self._remove_links_to(f, t)
+        self._remove_links_to(numbers)
 
-        for i in range(t, f - 1, -1):  # delete pages, last to first
+        for i in reversed(numbers):  # delete pages, last to first
             self._delete_page(i)
 
         self._reset_page_refs()
@@ -5369,7 +5400,7 @@ class Page(object):
         """Reflects page de-rotation."""
         return Matrix(TOOLS._derotate_matrix(self))
 
-    def addCaretAnnot(self, point: point_like) -> "Annot":
+    def add_caret_annot(self, point: point_like) -> "Annot":
         """Add a 'Caret' annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5380,7 +5411,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addStrikeoutAnnot(
+    def add_strikeout_annot(
         self, quads=None, start=None, stop=None, clip=None
     ) -> "Annot":
         """Add a 'StrikeOut' annotation."""
@@ -5390,7 +5421,7 @@ class Page(object):
             q = CheckMarkerArg(quads)
         return self._add_text_marker(q, PDF_ANNOT_STRIKE_OUT)
 
-    def addUnderlineAnnot(
+    def add_underline_annot(
         self, quads=None, start=None, stop=None, clip=None
     ) -> "Annot":
         """Add a 'Underline' annotation."""
@@ -5400,7 +5431,7 @@ class Page(object):
             q = CheckMarkerArg(quads)
         return self._add_text_marker(q, PDF_ANNOT_UNDERLINE)
 
-    def addSquigglyAnnot(
+    def add_squiggly_annot(
         self, quads=None, start=None, stop=None, clip=None
     ) -> "Annot":
         """Add a 'Squiggly' annotation."""
@@ -5410,7 +5441,7 @@ class Page(object):
             q = CheckMarkerArg(quads)
         return self._add_text_marker(q, PDF_ANNOT_SQUIGGLY)
 
-    def addHighlightAnnot(
+    def add_highlight_annot(
         self, quads=None, start=None, stop=None, clip=None
     ) -> "Annot":
         """Add a 'Highlight' annotation."""
@@ -5420,7 +5451,7 @@ class Page(object):
             q = CheckMarkerArg(quads)
         return self._add_text_marker(q, PDF_ANNOT_HIGHLIGHT)
 
-    def addRectAnnot(self, rect: rect_like) -> "Annot":
+    def add_rect_annot(self, rect: rect_like) -> "Annot":
         """Add a 'Square' (rectangle) annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5431,7 +5462,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addCircleAnnot(self, rect: rect_like) -> "Annot":
+    def add_circle_annot(self, rect: rect_like) -> "Annot":
         """Add a 'Circle' (ellipse, oval) annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5442,7 +5473,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addTextAnnot(
+    def add_text_annot(
         self, point: point_like, text: str, icon: str = "Note"
     ) -> "Annot":
         """Add a 'Text' (sticky note) annotation."""
@@ -5455,7 +5486,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addLineAnnot(self, p1: point_like, p2: point_like) -> "Annot":
+    def add_line_annot(self, p1: point_like, p2: point_like) -> "Annot":
         """Add a 'Line' annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5466,7 +5497,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addPolylineAnnot(self, points: list) -> "Annot":
+    def add_polyline_annot(self, points: list) -> "Annot":
         """Add a 'PolyLine' annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5477,7 +5508,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addPolygonAnnot(self, points: list) -> "Annot":
+    def add_polygon_annot(self, points: list) -> "Annot":
         """Add a 'Polygon' annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5488,7 +5519,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addStampAnnot(self, rect: rect_like, stamp: int = 0) -> "Annot":
+    def add_stamp_annot(self, rect: rect_like, stamp: int = 0) -> "Annot":
         """Add a ('rubber') 'Stamp' annotation."""
         old_rotation = annot_preprocess(self)
         try:
@@ -5499,7 +5530,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addInkAnnot(self, handwriting: list) -> "Annot":
+    def add_ink_annot(self, handwriting: list) -> "Annot":
         """Add a 'Ink' ('handwriting') annotation.
 
         The argument must be a list of lists of point_likes.
@@ -5513,7 +5544,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addFileAnnot(
+    def add_file_annot(
         self,
         point: point_like,
         buffer: typing.ByteString,
@@ -5535,7 +5566,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addFreetextAnnot(
+    def add_freetext_annot(
         self,
         rect: rect_like,
         text: str,
@@ -5566,7 +5597,7 @@ class Page(object):
         annot_postprocess(self, annot)
         return annot
 
-    def addRedactAnnot(
+    def add_redact_annot(
         self,
         quad,
         text: OptStr = None,
@@ -5714,7 +5745,7 @@ class Page(object):
     # ---------------------------------------------------------------------
     # page addWidget
     # ---------------------------------------------------------------------
-    def addWidget(self, widget: Widget) -> "Annot":
+    def add_widget(self, widget: Widget) -> "Annot":
         """Add a 'Widget' (form field)."""
         CheckParent(self)
         doc = self.parent

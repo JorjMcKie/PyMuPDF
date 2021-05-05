@@ -7561,23 +7561,24 @@ void retainpages(fz_context *ctx, globals *glo, PyObject *liste)
     pdf_drop_obj(ctx, root);
 }
 
-PyObject *remove_dest_range(fz_context *ctx, pdf_document *pdf, int first, int last)
+void remove_dest_range(fz_context *ctx, pdf_document *pdf, PyObject *numbers)
 {
-    int i, pno, pagecount = pdf_count_pages(ctx, pdf);
-    if (!INRANGE(first, 0, pagecount-1) ||
-        !INRANGE(last, 0, pagecount-1) ||
-        (first > last))
-        Py_RETURN_NONE;
+    int i, j, pno, len, pagecount = pdf_count_pages(ctx, pdf);
+    PyObject *n1 = NULL;
     fz_try(ctx) {
         for (i = 0; i < pagecount; i++) {
-            if (INRANGE(i, first, last)) continue;
+            n1 = PyLong_FromLong((long) i);
+            if (PySequence_Contains(numbers, n1)) {
+                Py_DECREF(n1);
+                continue;
+            }
+            Py_DECREF(n1);
 
             pdf_obj *pageref = pdf_lookup_page_obj(ctx, pdf, i);
             pdf_obj *annots = pdf_dict_get(ctx, pageref, PDF_NAME(Annots));
             pdf_obj *target;
             if (!annots) continue;
-            int len = pdf_array_len(ctx, annots);
-            int j;
+            len = pdf_array_len(ctx, annots);
             for (j = len - 1; j >= 0; j -= 1) {
                 pdf_obj *o = pdf_array_get(ctx, annots, j);
                 if (!pdf_name_eq(ctx, pdf_dict_get(ctx, o, PDF_NAME(Subtype)), PDF_NAME(Link)))
@@ -7600,16 +7601,21 @@ PyObject *remove_dest_range(fz_context *ctx, pdf_document *pdf, int first, int l
                                             pdf_to_text_string(ctx, dest),
                                             NULL, NULL);
                 }
-                if (INRANGE(pno, first, last)) {
+                if (pno < 0) { // page lookup did not work
+                    continue;
+                }
+                n1 = PyLong_FromLong((long) pno);
+                if (PySequence_Contains(numbers, n1)) {
                     pdf_array_delete(ctx, annots, j);
                 }
+                Py_DECREF(n1);
             }
         }
     }
     fz_catch(ctx) {
-        return NULL;
+        fz_rethrow(ctx);
     }
-    Py_RETURN_NONE;
+    return;
 }
 
 
@@ -9124,6 +9130,72 @@ SWIGINTERN struct Page *Document_load_page(struct Document *self,PyObject *page_
             PyErr_Clear();
             return (struct Page *) page;
         }
+SWIGINTERN PyObject *Document__remove_links_to(struct Document *self,PyObject *numbers){
+            fz_try(gctx) {
+                pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
+                remove_dest_range(gctx, pdf, numbers);
+            }
+            fz_catch(gctx) {
+                return NULL;
+            }
+            Py_RETURN_NONE;
+        }
+SWIGINTERN struct Outline *Document__loadOutline(struct Document *self){
+            fz_outline *ol = NULL;
+            fz_document *doc = (fz_document *) self;
+            fz_try(gctx) {
+                ol = fz_load_outline(gctx, doc);
+            }
+            fz_catch(gctx) {
+                return NULL;
+            }
+            return (struct Outline *) ol;
+        }
+SWIGINTERN void Document__dropOutline(struct Document *self,struct Outline *ol){
+            DEBUGMSG1("Outline");
+            fz_outline *this_ol = (fz_outline *) ol;
+            fz_drop_outline(gctx, this_ol);
+            DEBUGMSG2;
+        }
+SWIGINTERN PyObject *Document__insert_font(struct Document *self,char *fontfile,PyObject *fontbuffer){
+            PyObject *value=NULL;
+            pdf_document *pdf = pdf_specifics(gctx, (fz_document *)self);
+
+            fz_try(gctx) {
+                ASSERT_PDF(pdf);
+                if (!fontfile && !EXISTS(fontbuffer)) {
+                    THROWMSG(gctx, "need one of fontfile, fontbuffer");
+                }
+                value = JM_insert_font(gctx, pdf, NULL, fontfile, fontbuffer,
+                            0, 0, 0, 0, 0, -1);
+            }
+            fz_catch(gctx) {
+                return NULL;
+            }
+            return value;
+        }
+SWIGINTERN PyObject *Document_get_outline_xrefs(struct Document *self){
+            PyObject *xrefs = PyList_New(0);
+            pdf_document *pdf = pdf_specifics(gctx, (fz_document *)self);
+            if (!pdf) {
+                return xrefs;
+            }
+            fz_try(gctx) {
+                pdf_obj *root = pdf_dict_get(gctx, pdf_trailer(gctx, pdf), PDF_NAME(Root));
+                if (!root) goto finished;
+                pdf_obj *olroot = pdf_dict_get(gctx, root, PDF_NAME(Outlines));
+                if (!olroot) goto finished;
+                pdf_obj *first = pdf_dict_get(gctx, olroot, PDF_NAME(First));
+                if (!first) goto finished;
+                xrefs = JM_outline_xrefs(gctx, first, xrefs);
+                finished:;
+            }
+            fz_catch(gctx) {
+                Py_DECREF(xrefs);
+                return NULL;
+            }
+            return xrefs;
+        }
 
 #include <limits.h>
 #if !defined(SWIG_NO_LLONG_MAX)
@@ -9223,75 +9295,6 @@ SWIG_AsVal_int (PyObject * obj, int *val)
   return res;
 }
 
-SWIGINTERN PyObject *Document__remove_links_to(struct Document *self,int first,int last){
-            fz_try(gctx) {
-                fz_document *doc = (fz_document *) self;
-                pdf_document *pdf = pdf_specifics(gctx, doc);
-                pdf_drop_page_tree(gctx, pdf);
-                pdf_load_page_tree(gctx, pdf);
-                remove_dest_range(gctx, pdf, first, last);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            Py_RETURN_NONE;
-        }
-SWIGINTERN struct Outline *Document__loadOutline(struct Document *self){
-            fz_outline *ol = NULL;
-            fz_document *doc = (fz_document *) self;
-            fz_try(gctx) {
-                ol = fz_load_outline(gctx, doc);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            return (struct Outline *) ol;
-        }
-SWIGINTERN void Document__dropOutline(struct Document *self,struct Outline *ol){
-            DEBUGMSG1("Outline");
-            fz_outline *this_ol = (fz_outline *) ol;
-            fz_drop_outline(gctx, this_ol);
-            DEBUGMSG2;
-        }
-SWIGINTERN PyObject *Document__insert_font(struct Document *self,char *fontfile,PyObject *fontbuffer){
-            PyObject *value=NULL;
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *)self);
-
-            fz_try(gctx) {
-                ASSERT_PDF(pdf);
-                if (!fontfile && !EXISTS(fontbuffer)) {
-                    THROWMSG(gctx, "need one of fontfile, fontbuffer");
-                }
-                value = JM_insert_font(gctx, pdf, NULL, fontfile, fontbuffer,
-                            0, 0, 0, 0, 0, -1);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            return value;
-        }
-SWIGINTERN PyObject *Document_get_outline_xrefs(struct Document *self){
-            PyObject *xrefs = PyList_New(0);
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *)self);
-            if (!pdf) {
-                return xrefs;
-            }
-            fz_try(gctx) {
-                pdf_obj *root = pdf_dict_get(gctx, pdf_trailer(gctx, pdf), PDF_NAME(Root));
-                if (!root) goto finished;
-                pdf_obj *olroot = pdf_dict_get(gctx, root, PDF_NAME(Outlines));
-                if (!olroot) goto finished;
-                pdf_obj *first = pdf_dict_get(gctx, olroot, PDF_NAME(First));
-                if (!first) goto finished;
-                xrefs = JM_outline_xrefs(gctx, first, xrefs);
-                finished:;
-            }
-            fz_catch(gctx) {
-                Py_DECREF(xrefs);
-                return NULL;
-            }
-            return xrefs;
-        }
 SWIGINTERN PyObject *Document_xref_get_keys(struct Document *self,int xref){
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *)self);
             pdf_obj *obj=NULL;
@@ -15576,35 +15579,21 @@ fail:
 SWIGINTERN PyObject *_wrap_Document__remove_links_to(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Document *arg1 = (struct Document *) 0 ;
-  int arg2 ;
-  int arg3 ;
+  PyObject *arg2 = (PyObject *) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
-  int val2 ;
-  int ecode2 = 0 ;
-  int val3 ;
-  int ecode3 = 0 ;
-  PyObject *swig_obj[3] ;
+  PyObject *swig_obj[2] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Document__remove_links_to", 3, 3, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Document__remove_links_to", 2, 2, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Document, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Document__remove_links_to" "', argument " "1"" of type '" "struct Document *""'"); 
   }
   arg1 = (struct Document *)(argp1);
-  ecode2 = SWIG_AsVal_int(swig_obj[1], &val2);
-  if (!SWIG_IsOK(ecode2)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode2), "in method '" "Document__remove_links_to" "', argument " "2"" of type '" "int""'");
-  } 
-  arg2 = (int)(val2);
-  ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
-  if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Document__remove_links_to" "', argument " "3"" of type '" "int""'");
-  } 
-  arg3 = (int)(val3);
+  arg2 = swig_obj[1];
   {
-    result = (PyObject *)Document__remove_links_to(arg1,arg2,arg3);
+    result = (PyObject *)Document__remove_links_to(arg1,arg2);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
