@@ -1,0 +1,47 @@
+language: python
+python: 3.7
+dist: xenial
+
+cache:
+  directories:
+  - "$HOME/Library/Caches/Homebrew"
+
+env:
+  global:
+  - MUPDF='https://mupdf.com/downloads/archive/mupdf-1.18.0-source.tar.gz'
+  - COPYFILE_DISABLE=1
+
+jobs:
+  include:
+  - os: linux
+    arch: arm64
+    python: '3.7'
+    services:
+    - docker
+    env: PIP=pip
+    before_script:
+    - export CIBW_BEFORE_BUILD="cd mupdf && make HAVE_X11=no
+      HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .. && pip install --upgrade pip"
+    - export CIBW_ENVIRONMENT='CFLAGS="-fPIC -std=gnu99"'
+
+install:
+#- "$PIP install git+https://github.com/joerick/cibuildwheel#egg=cibuildwheel"
+- "$PIP install cibuildwheel"
+- mkdir mupdf && wget -q $MUPDF -O - | tar zx -C mupdf --strip-components=1
+- cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
+
+script:
+- export CIBW_SKIP="pp* cp27-* cp35-*"
+- export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
+- cibuildwheel --output-dir wheelhouse
+
+deploy:
+  provider: pages
+  token: $GITHUB_TOKEN
+  keep_history: false
+  skip_cleanup: true
+  local_dir: wheelhouse
+  repo: pymupdf/PyMuPDF-wheels
+  target_branch: $TRAVIS_OS_NAME
+  on:
+    repo: JorjMcKie/py-mupdf
