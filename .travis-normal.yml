@@ -14,7 +14,6 @@ env:
 jobs:
   include:
   - os: linux
-    arch: arm64
     python: '3.7'
     services:
     - docker
@@ -23,6 +22,17 @@ jobs:
     - export CIBW_BEFORE_BUILD="cd mupdf && make HAVE_X11=no
       HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .. && pip install --upgrade pip"
     - export CIBW_ENVIRONMENT='CFLAGS="-fPIC -std=gnu99"'
+  - os: osx
+    osx_image: xcode12.2
+    language: shell
+    env: PIP=pip3
+    before_install:
+    - brew update
+    - sudo mkdir -p /usr/local/man && sudo chmod a+rw /usr/local/man
+    before_script:
+    - export CIBW_BEFORE_BUILD="cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no
+      prefix=/usr/local install && cd .."
+    - export CIBW_ENVIRONMENT='CFLAGS=-fPIC'
 
 install:
 #- "$PIP install git+https://github.com/joerick/cibuildwheel#egg=cibuildwheel"
@@ -31,7 +41,7 @@ install:
 - cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
 
 script:
-- export CIBW_SKIP="pp* cp27-* cp35-*"
+- export CIBW_SKIP="pp* cp27-* cp35-* *i686"
 - export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
 - cibuildwheel --output-dir wheelhouse
 
@@ -42,6 +52,6 @@ deploy:
   skip_cleanup: true
   local_dir: wheelhouse
   repo: pymupdf/PyMuPDF-wheels
-  target_branch: $TRAVIS_OS_NAME-extra
+  target_branch: $TRAVIS_OS_NAME
   on:
     repo: JorjMcKie/py-mupdf
