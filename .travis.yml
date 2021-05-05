@@ -25,23 +25,14 @@ jobs:
     - export CIBW_ENVIRONMENT='CFLAGS="-fPIC -std=gnu99"'
 
 install:
-#- "$PIP install git+https://github.com/joerick/cibuildwheel#egg=cibuildwheel"
 - "$PIP install cibuildwheel"
 - mkdir mupdf && wget -q $MUPDF -O - | tar zx -C mupdf --strip-components=1
 - cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
 
 script:
-- export CIBW_SKIP="pp* cp27-* cp35-*"
-- export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
-- cibuildwheel --output-dir wheelhouse
-
-deploy:
-  provider: pages
-  token: $GITHUB_TOKEN
-  keep_history: false
-  skip_cleanup: true
-  local_dir: wheelhouse
-  repo: pymupdf/PyMuPDF-wheels
-  target_branch: $TRAVIS_OS_NAME-extra
-  on:
-    repo: JorjMcKie/py-mupdf
+  - export CIBW_SKIP="pp* cp27-* cp35-*"
+  - export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
+  - cibuildwheel --output-dir wheelhouse
+  - |
+    python3 -m pip install twine
+    python3 -m twine upload wheelhouse/*.whl
