@@ -45,7 +45,7 @@ install:
 
 script:
 - export CIBW_SKIP="pp* cp27* cp35* *i686"
-- export CIBW_TEST_COMMAND="python -m pytest"
+- export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
 - cibuildwheel --output-dir wheelhouse
 
 deploy:
