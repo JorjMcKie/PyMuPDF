@@ -2744,8 +2744,6 @@ static swig_module_info swig_module = {swig_types, 15, 0, 0, 0, 0};
 #define THROWMSG(gctx, msg) fz_throw(gctx, FZ_ERROR_GENERIC, msg)
 #define ASSERT_PDF(cond) if (cond == NULL) fz_throw(gctx, FZ_ERROR_GENERIC, "not a PDF")
 #define INRANGE(v, low, high) ((low) <= v && v <= (high))
-#define MAX(a, b) ((a) < (b)) ? (b) : (a)
-#define MIN(a, b) ((a) < (b)) ? (a) : (b)
 
 #define JM_PyErr_Clear if (PyErr_Occurred()) PyErr_Clear()
 
@@ -4553,13 +4551,13 @@ calc_image_matrix(int width, int height, PyObject *tr, int rotate, int keep)
     w = trw;
     h = trh;
     if (keep) {
-        large = (float) MAX(width, height);
+        large = (float) Py_MAX(width, height);
         fw = (float) width / large;
         fh = (float) height / large;
     } else {
         fw = fh = 1;
     }
-    small = MIN(fw, fh);
+    small = Py_MIN(fw, fh);
     if (rotate != 0 && rotate != 180) {
         f = fw;
         fw = fh;
@@ -7563,28 +7561,29 @@ void retainpages(fz_context *ctx, globals *glo, PyObject *liste)
 
 void remove_dest_range(fz_context *ctx, pdf_document *pdf, PyObject *numbers)
 {
-    int i, j, pno, len, pagecount = pdf_count_pages(ctx, pdf);
-    PyObject *n1 = NULL;
     fz_try(ctx) {
+        int i, j, pno, len, pagecount = pdf_count_pages(ctx, pdf);
+        PyObject *n1 = NULL;
+        pdf_obj *target, *annots, *pageref, *o, *action, *dest;
         for (i = 0; i < pagecount; i++) {
             n1 = PyLong_FromLong((long) i);
-            if (PySequence_Contains(numbers, n1)) {
+            if (PySet_Contains(numbers, n1)) {
                 Py_DECREF(n1);
                 continue;
             }
             Py_DECREF(n1);
 
-            pdf_obj *pageref = pdf_lookup_page_obj(ctx, pdf, i);
-            pdf_obj *annots = pdf_dict_get(ctx, pageref, PDF_NAME(Annots));
-            pdf_obj *target;
+            pageref = pdf_lookup_page_obj(ctx, pdf, i);
+            annots = pdf_dict_get(ctx, pageref, PDF_NAME(Annots));
             if (!annots) continue;
             len = pdf_array_len(ctx, annots);
             for (j = len - 1; j >= 0; j -= 1) {
-                pdf_obj *o = pdf_array_get(ctx, annots, j);
-                if (!pdf_name_eq(ctx, pdf_dict_get(ctx, o, PDF_NAME(Subtype)), PDF_NAME(Link)))
+                o = pdf_array_get(ctx, annots, j);
+                if (!pdf_name_eq(ctx, pdf_dict_get(ctx, o, PDF_NAME(Subtype)), PDF_NAME(Link))) {
                     continue;
-                pdf_obj *action = pdf_dict_get(ctx, o, PDF_NAME(A));
-                pdf_obj *dest =  pdf_dict_get(ctx, o, PDF_NAME(Dest));
+                }
+                action = pdf_dict_get(ctx, o, PDF_NAME(A));
+                dest =  pdf_dict_get(ctx, o, PDF_NAME(Dest));
                 if (action) {
                     if (!pdf_name_eq(ctx, pdf_dict_get(ctx, action,
                         PDF_NAME(S)), PDF_NAME(GoTo)))
@@ -7601,17 +7600,18 @@ void remove_dest_range(fz_context *ctx, pdf_document *pdf, PyObject *numbers)
                                             pdf_to_text_string(ctx, dest),
                                             NULL, NULL);
                 }
-                if (pno < 0) { // page lookup did not work
+                if (pno < 0) { // page number lookup did not work
                     continue;
                 }
                 n1 = PyLong_FromLong((long) pno);
-                if (PySequence_Contains(numbers, n1)) {
+                if (PySet_Contains(numbers, n1)) {
                     pdf_array_delete(ctx, annots, j);
                 }
                 Py_DECREF(n1);
             }
         }
     }
+
     fz_catch(ctx) {
         fz_rethrow(ctx);
     }
@@ -10201,14 +10201,14 @@ SWIGINTERN PyObject *Document_insert_pdf(struct Document *self,struct Document *
             int fp = from_page, tp = to_page, sa = start_at;
 
             // normalize page numbers
-            fp = MAX(fp, 0);                // -1 = first page
-            fp = MIN(fp, srcCount - 1);     // but do not exceed last page
+            fp = Py_MAX(fp, 0);                // -1 = first page
+            fp = Py_MIN(fp, srcCount - 1);     // but do not exceed last page
 
             if (tp < 0) tp = srcCount - 1;  // -1 = last page
-            tp = MIN(tp, srcCount - 1);     // but do not exceed last page
+            tp = Py_MIN(tp, srcCount - 1);     // but do not exceed last page
 
             if (sa < 0) sa = outCount;      // -1 = behind last page
-            sa = MIN(sa, outCount);         // but that is also the limit
+            sa = Py_MIN(sa, outCount);         // but that is also the limit
 
             fz_try(gctx) {
                 if (!pdfout || !pdfsrc) THROWMSG(gctx, "source or target not a PDF");
@@ -11182,13 +11182,18 @@ SWIGINTERN PyObject *Document__move_copy_page(struct Document *self,int pno,int 
         }
 SWIGINTERN PyObject *Document__remove_toc_item(struct Document *self,int xref){
             // "remove" bookmark by letting it point to nowhere
-            pdf_obj *item = NULL;
+            pdf_obj *item = NULL, *color;
+            int i;
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *) self);
             fz_try(gctx) {
                 item = pdf_new_indirect(gctx, pdf, xref, 0);
                 pdf_dict_del(gctx, item, PDF_NAME(Dest));
                 pdf_dict_del(gctx, item, PDF_NAME(A));
-                pdf_dict_put_text_string(gctx, item, PDF_NAME(Title), "<>");
+                color = pdf_new_array(gctx, pdf, 3);
+                for (i=0; i < 3; i++) {
+                    pdf_array_push_real(gctx, color, 0.8);
+                }
+                pdf_dict_put_drop(gctx, item, PDF_NAME(C), color);
             }
             fz_always(gctx) {
                 pdf_drop_obj(gctx, item);

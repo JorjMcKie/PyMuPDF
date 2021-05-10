@@ -103,9 +103,9 @@ except ImportError:
 
 
 VersionFitz = "1.18.0"
-VersionBind = "1.18.13"
-VersionDate = "2021-05-05 06:32:22"
-version = (VersionBind, VersionFitz, "20210505063222")
+VersionBind = "1.18.14"
+VersionDate = "2021-05-07 09:56:30"
+version = (VersionBind, VersionFitz, "20210507095630")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -2402,7 +2402,7 @@ class linkDest(object):
 # -------------------------------------------------------------------------------
 # "Now" timestamp in PDF Format
 # -------------------------------------------------------------------------------
-def getPDFnow() -> str:
+def get_pdf_now() -> str:
     import time
 
     tz = "%s'%s'" % (
@@ -2419,7 +2419,7 @@ def getPDFnow() -> str:
     return tstamp
 
 
-def getPDFstr(s: str) -> str:
+def get_pdf_str(s: str) -> str:
     """Return a PDF string depending on its coding.
 
     Notes:
@@ -3907,8 +3907,8 @@ class Document(object):
         xref = self._embfile_upd(
             idx, buffer=buffer, filename=filename, ufilename=ufilename, desc=desc
         )
-        date = getPDFnow()
-        self.xref_set_key(xref, "Params/ModDate", getPDFstr(date))
+        date = get_pdf_now()
+        self.xref_set_key(xref, "Params/ModDate", get_pdf_str(date))
         return xref
 
     def embfile_add(
@@ -3942,10 +3942,10 @@ class Document(object):
         xref = self._embfile_add(
             name, buffer=buffer, filename=filename, ufilename=ufilename, desc=desc
         )
-        date = getPDFnow()
+        date = get_pdf_now()
         self.xref_set_key(xref, "Type", "/EmbeddedFile")
-        self.xref_set_key(xref, "Params/CreationDate", getPDFstr(date))
-        self.xref_set_key(xref, "Params/ModDate", getPDFstr(date))
+        self.xref_set_key(xref, "Params/CreationDate", get_pdf_str(date))
+        self.xref_set_key(xref, "Params/ModDate", get_pdf_str(date))
         return xref
 
     def convert_to_pdf(
@@ -4913,16 +4913,17 @@ class Document(object):
         while pno < 0:
             pno += page_count
 
-        if not pno in range(page_count):
+        if pno >= page_count:
             raise ValueError("bad page number(s)")
 
         # remove TOC bookmarks pointing to deleted page
-        old_toc = self.get_toc()
-        for i, item in enumerate(old_toc):
+        toc = self.get_toc()
+        ol_xrefs = self.get_outline_xrefs()
+        for i, item in enumerate(toc):
             if item[2] == pno + 1:
-                self.del_toc_item(i)
+                self._remove_toc_item(ol_xrefs[i])
 
-        self._remove_links_to((pno,))
+        self._remove_links_to(frozenset((pno,)))
         self._delete_page(pno)
         self._reset_page_refs()
 
@@ -4963,6 +4964,8 @@ class Document(object):
                     raise ValueError("both arguments must be int")
                 if f > t:
                     f, t = t, f
+                if not f <= t < page_count:
+                    raise ValueError("bad page number(s)")
                 numbers = tuple(range(f, t + 1))
             else:
                 r = args[0]
@@ -4971,15 +4974,19 @@ class Document(object):
                 numbers = tuple(r)
 
         numbers = list(map(int, set(numbers)))  # ensure unique integers
+        if numbers == []:
+            print("nothing to delete")
+            return
         numbers.sort()
         if numbers[0] < 0 or numbers[-1] >= page_count:
             raise ValueError("bad page number(s)")
-        old_toc = self.get_toc()
-        for i, item in enumerate(old_toc):
-            if item[2] - 1 in numbers:  # a deleted page number
-                self.del_toc_item(i)
+        frozen_numbers = frozenset(numbers)
+        toc = self.get_toc()
+        for i, xref in enumerate(self.get_outline_xrefs()):
+            if toc[i][2] - 1 in frozen_numbers:
+                self._remove_toc_item(xref)  # remove target in PDF object
 
-        self._remove_links_to(numbers)
+        self._remove_links_to(frozen_numbers)
 
         for i in reversed(numbers):  # delete pages, last to first
             self._delete_page(i)
@@ -5073,6 +5080,29 @@ class Document(object):
         if i not in self:
             raise IndexError("page not in document")
         return self.load_page(i)
+
+    def __delitem__(self, i: AnyType) -> None:
+        if not self.is_pdf:
+            raise ValueError("not a PDF")
+        if type(i) is int:
+            return self.delete_page(i)
+        if type(i) in (list, tuple, range):
+            return self.delete_pages(i)
+        if type(i) is not slice:
+            raise ValueError("bad argument type")
+        pc = self.page_count
+        start = i.start if i.start else 0
+        stop = i.stop if i.stop else pc
+        step = i.step if i.step else 1
+        while start < 0:
+            start += pc
+        if start >= pc:
+            raise ValueError("bad page number(s)")
+        while stop < 0:
+            stop += pc
+        if stop > pc:
+            raise ValueError("bad page number(s)")
+        return self.delete_pages(range(start, stop, step))
 
     def pages(
         self, start: OptInt = None, stop: OptInt = None, step: OptInt = None
@@ -6495,7 +6525,13 @@ class Pixmap(object):
         opaque: AnyType = None,
     ) -> AnyType:
         """Set alpha channel to values contained in a byte array.
-        If omitted, set alphas to 255."""
+        If omitted, set alphas to 255.
+
+        Args:
+            alphavalues: (bytes) with length (width * height) values in range(255).
+            premultiply: (bool, True) premultiply colors with alpha values.
+            opaque: (tuple) length colorspace.n, color value to set to opacity 0.
+        """
 
         return _fitz.Pixmap_set_alpha(self, alphavalues, premultiply, opaque)
 

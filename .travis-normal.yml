@@ -1,3 +1,6 @@
+# --------------------------------
+# builds Linux and Mac OSX wheels
+# --------------------------------
 language: python
 python: 3.7
 dist: xenial
@@ -35,14 +38,14 @@ jobs:
     - export CIBW_ENVIRONMENT='CFLAGS=-fPIC'
 
 install:
-#- "$PIP install git+https://github.com/joerick/cibuildwheel#egg=cibuildwheel"
 - "$PIP install cibuildwheel"
+- "$PIP install pytest"
 - mkdir mupdf && wget -q $MUPDF -O - | tar zx -C mupdf --strip-components=1
 - cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
 
 script:
-- export CIBW_SKIP="pp* cp27-* cp35-* *i686"
-- export CIBW_TEST_COMMAND="python -c 'import fitz;print(fitz.__doc__)'"
+- export CIBW_SKIP="pp* cp27* cp35* *i686"
+- export CIBW_TEST_COMMAND="python -m pytest"
 - cibuildwheel --output-dir wheelhouse
 
 deploy:
@@ -55,3 +58,4 @@ deploy:
   target_branch: $TRAVIS_OS_NAME
   on:
     repo: JorjMcKie/py-mupdf
+

@@ -1,3 +1,6 @@
+# --------------------------------
+# generates Linux ARM wheels
+# --------------------------------
 language: python
 python: 3.7
 dist: xenial
@@ -25,7 +28,6 @@ jobs:
     - export CIBW_ENVIRONMENT='CFLAGS="-fPIC -std=gnu99"'
 
 install:
-#- "$PIP install git+https://github.com/joerick/cibuildwheel#egg=cibuildwheel"
 - "$PIP install cibuildwheel"
 - mkdir mupdf && wget -q $MUPDF -O - | tar zx -C mupdf --strip-components=1
 - cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
@@ -45,3 +47,4 @@ deploy:
   target_branch: $TRAVIS_OS_NAME-extra
   on:
     repo: JorjMcKie/py-mupdf
+

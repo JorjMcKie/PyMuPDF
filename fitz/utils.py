@@ -469,7 +469,7 @@ def getTextbox(
     page: Page,
     rect: rect_like,
 ) -> str:
-    rc = page.getText("text", clip=rect, flags=0)
+    rc = page.get_text("text", clip=rect, flags=0)
     if rc.endswith("\n"):
         rc = rc[:-1]
     return rc
@@ -1031,7 +1031,7 @@ def set_metadata(doc: Document, m: dict) -> None:
         if not bool(val) or not type(val) is str or val == "none":
             val = "null"
         else:
-            val = fitz.getPDFstr(val)
+            val = fitz.get_pdf_str(val)
         doc.xref_set_key(info_xref, pdf_key, val)
     doc.init_doc()
     return
@@ -1067,21 +1067,21 @@ def getDestStr(xref: int, ddict: dict) -> str:
         return dest
 
     if ddict["kind"] == LINK_URI:
-        dest = str_uri % (getPDFstr(ddict["uri"]),)
+        dest = str_uri % (get_pdf_str(ddict["uri"]),)
         return dest
 
     if ddict["kind"] == LINK_LAUNCH:
-        fspec = getPDFstr(ddict["file"])
+        fspec = get_pdf_str(ddict["file"])
         dest = str_launch % (fspec, fspec)
         return dest
 
     if ddict["kind"] == LINK_GOTOR and ddict["page"] < 0:
-        fspec = getPDFstr(ddict["file"])
-        dest = str_gotor2 % (getPDFstr(ddict["to"]), fspec, fspec)
+        fspec = get_pdf_str(ddict["file"])
+        dest = str_gotor2 % (get_pdf_str(ddict["to"]), fspec, fspec)
         return dest
 
     if ddict["kind"] == LINK_GOTOR and ddict["page"] >= 0:
-        fspec = getPDFstr(ddict["file"])
+        fspec = get_pdf_str(ddict["file"])
         dest = str_gotor1 % (
             ddict["page"],
             ddict["to"].x,
@@ -1165,7 +1165,7 @@ def setToC(
     for i in range(toclen):
         o = toc[i]
         lvl = o[0]  # level
-        title = getPDFstr(o[1])  # title
+        title = get_pdf_str(o[1])  # title
         pno = min(doc.page_count - 1, max(0, o[2] - 1))  # page number
         page_xref = doc.page_xref(pno)
         page_height = doc.page_cropbox(pno).height
@@ -1314,7 +1314,7 @@ def do_links(
                 )
             else:
                 txt = annot_skel["gotor2"]  # annot_gotor_n
-                to = getPDFstr(lnk["to"])
+                to = get_pdf_str(lnk["to"])
                 to = to[1:-1]
                 f = lnk["file"]
                 annot = txt % (to, f, rect)
@@ -1413,7 +1413,7 @@ def getLinkText(page: Page, lnk: dict) -> str:
             annot = txt % (xref, ipnt.x, ipnt.y, rect)
         else:
             txt = annot_skel["goto2"]  # annot_goto_n
-            annot = txt % (getPDFstr(lnk["to"]), rect)
+            annot = txt % (get_pdf_str(lnk["to"]), rect)
 
     elif lnk["kind"] == LINK_GOTOR:
         if lnk["page"] >= 0:
@@ -1424,7 +1424,7 @@ def getLinkText(page: Page, lnk: dict) -> str:
             annot = txt % (lnk["page"], pnt.x, pnt.y, lnk["file"], lnk["file"], rect)
         else:
             txt = annot_skel["gotor2"]  # annot_gotor_n
-            annot = txt % (getPDFstr(lnk["to"]), lnk["file"], rect)
+            annot = txt % (get_pdf_str(lnk["to"]), lnk["file"], rect)
 
     elif lnk["kind"] == LINK_LAUNCH:
         txt = annot_skel["launch"]  # annot_launch
@@ -1623,7 +1623,15 @@ def newPage(
     width: float = 595,
     height: float = 842,
 ) -> Page:
-    """Create and return a new page object."""
+    """Create and return a new page object.
+
+    Args:
+        pno: (int) insert before this page. Default: after last page.
+        width: (float) page width in points. Default: 595 (ISO A4 width).
+        height: (float) page height in points. Default 842 (ISO A4 height).
+    Returns:
+        A Page object.
+    """
     doc._newPage(pno, width=width, height=height)
     return doc[pno]
 
@@ -1642,7 +1650,7 @@ def insertPage(
     """Create a new PDF page and insert some text.
 
     Notes:
-        Function combining Document.newPage() and Page.insert_text().
+        Function combining Document.new_page() and Page.insert_text().
         For parameter details see these methods.
     """
     page = doc.newPage(pno=pno, width=width, height=height)
