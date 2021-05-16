@@ -1766,15 +1766,15 @@ annot_skel = {
 }
 
 
-def getTextlength(
+def get_text_length(
     text: str, fontname: str = "helv", fontsize: float = 11, encoding: int = 0
 ) -> float:
-    """Calculate length of a string for a given built-in font.
+    """Calculate length of a string for a built-in font.
 
     Args:
         fontname: name of the font.
-        fontsize: size of font in points.
-        encoding: encoding to use (0=Latin, 1=Greek, 2=Cyrillic).
+        fontsize: font size points.
+        encoding: encoding to use, 0=Latin (default), 1=Greek, 2=Cyrillic.
     Returns:
         (float) length of text.
     """
@@ -2517,7 +2517,7 @@ www.din-formate.de
 www.din-formate.info/amerikanische-formate.html
 www.directtools.de/wissen/normen/iso.htm
 """
-paperSizes = {  # known paper formats @ 72 dpi
+paper_sizes = {  # known paper formats @ 72 dpi
     "a0": (2384, 3370),
     "a1": (1684, 2384),
     "a10": (74, 105),
@@ -2565,7 +2565,7 @@ paperSizes = {  # known paper formats @ 72 dpi
 }
 
 
-def PaperSize(s: str) -> tuple:
+def paper_size(s: str) -> tuple:
     """Return a tuple (width, height) for a given paper format string.
 
     Notes:
@@ -2579,15 +2579,15 @@ def PaperSize(s: str) -> tuple:
         size = size[:-2]
     if size.endswith("-p"):
         size = size[:-2]
-    rc = paperSizes.get(size, (-1, -1))
+    rc = paper_sizes.get(size, (-1, -1))
     if f == "p":
         return rc
     return (rc[1], rc[0])
 
 
-def PaperRect(s: str) -> Rect:
+def paper_rect(s: str) -> Rect:
     """Return a Rect for the paper size indicated in string 's'. Must conform to the argument of method 'PaperSize', which will be invoked."""
-    width, height = PaperSize(s)
+    width, height = paper_size(s)
     return Rect(0.0, 0.0, width, height)
 
 
@@ -2710,13 +2710,14 @@ def DUMMY(*args, **kw):
     return
 
 
-def planishLine(p1: point_like, p2: point_like) -> Matrix:
-    """Return matrix which flattens out the line from p1 to p2.
+def planish_line(p1: point_like, p2: point_like) -> Matrix:
+    """Compute matrix which maps line from p1 to p2 to the x-axis, such that it
+    maintains its length and p1 * matrix = Point(0, 0).
 
     Args:
         p1, p2: point_like
     Returns:
-        Matrix which maps p1 to Point(0,0) and p2 to a point on the x axis at
+        Matrix which maps p1 to Point(0, 0) and p2 to a point on the x axis at
         the same distance to Point(0,0). Will always combine a rotation and a
         transformation.
     """
@@ -2725,7 +2726,7 @@ def planishLine(p1: point_like, p2: point_like) -> Matrix:
     return Matrix(TOOLS._hor_matrix(p1, p2))
 
 
-def ImageProperties(img: typing.ByteString) -> dict:
+def image_properties(img: typing.ByteString) -> dict:
     """Return basic properties of an image.
 
     Args:
@@ -5850,6 +5851,12 @@ class Page(object):
                 return False
             if p1.y != p2.y or p3.x != p4.x or p5.y != p6.y:
                 return False
+            r = Rect(p1, p2).normalize()
+            r |= p3
+            r |= p4
+            r |= p5
+            r |= p6
+            path["rect"] = r
             return True
 
         def check_and_merge(this, prev):
@@ -5917,27 +5924,34 @@ class Page(object):
                 if item[0] == "m":
                     p = Point(item[1]) * ctm
                     current = p
-                    path["rect"] = Rect(p, p)
                 elif item[0] == "l":
                     p2 = Point(item[1]) * ctm
                     path["items"].append(("l", current, p2))
                     current = p2
-                    path["rect"] |= p2
                 elif item[0] == "c":
                     p2 = Point(item[1]) * ctm
                     p3 = Point(item[2]) * ctm
                     p4 = Point(item[3]) * ctm
                     path["items"].append(("c", current, p2, p3, p4))
                     current = p4
-                    path["rect"] |= p2
-                    path["rect"] |= p3
-                    path["rect"] |= p4
             elif item == "closePath":
                 path["closePath"] = True
             elif item in ("estroke", "efill", "eclip", "eclip-stroke"):
                 if is_rectangle(path):
                     path["items"] = [("re", path["rect"])]
                     path["closePath"] = False
+                # make path rectangle for items
+                else:
+                    for i, item in enumerate(path["items"]):
+                        for j, p in enumerate(item[1:]):
+                            if i == 0 and j == 0:
+                                x0 = x1 = p.x
+                                y0 = y1 = p.y
+                            x0 = min(x0, p.x)
+                            x1 = max(x1, p.x)
+                            y0 = min(y0, p.y)
+                            y1 = max(y1, p.y)
+                    path["rect"] = Rect(x0, y0, x1, y1)
 
                 try:  # check if path is "stroke" duplicate of previous
                     prev = paths.pop()  # get previous path in list
@@ -8356,10 +8370,34 @@ class Font(object):
 
     def glyph_advance(
         self, chr: int, language: OptStr = None, script: int = 0, wmode: int = 0
-    ) -> float:
+    ) -> AnyType:
         """Return the glyph width of a unicode (font size 1)."""
 
         return _fitz.Font_glyph_advance(self, chr, language, script, wmode)
+
+    def text_length(
+        self,
+        text: AnyType,
+        fontsize: "double" = 11,
+        language: OptStr = None,
+        script: int = 0,
+        wmode: int = 0,
+    ) -> AnyType:
+        """Return length of unicode 'text' under a fontsize."""
+
+        return _fitz.Font_text_length(self, text, fontsize, language, script, wmode)
+
+    def char_lengths(
+        self,
+        text: AnyType,
+        fontsize: "double" = 11,
+        language: OptStr = None,
+        script: int = 0,
+        wmode: int = 0,
+    ) -> AnyType:
+        """Return tuple of char lengths of unicode 'text' under a fontsize."""
+
+        return _fitz.Font_char_lengths(self, text, fontsize, language, script, wmode)
 
     def glyph_bbox(
         self, chr: int, language: OptStr = None, script: int = 0
@@ -8440,10 +8478,6 @@ class Font(object):
     def unicode_to_glyph_name(self, ch):
         """Return the glyph name for a unicode."""
         return unicode_to_glyph_name(ch)
-
-    def text_length(self, text, fontsize=11, wmode=0):
-        """Calculate the length of a string for this font."""
-        return fontsize * sum([self.glyph_advance(ord(c), wmode=wmode) for c in text])
 
     def __repr__(self):
         return "Font('%s')" % self.name
@@ -8692,9 +8726,9 @@ class Tools(object):
         self,
         text: str,
         fontname: str,
-        fontsize: float,
+        fontsize: "double",
         encoding: int = 0,
-    ) -> float:
+    ) -> AnyType:
         return _fitz.Tools__measure_string(self, text, fontname, fontsize, encoding)
 
     def _sine_between(

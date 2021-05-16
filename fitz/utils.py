@@ -1031,7 +1031,7 @@ def set_metadata(doc: Document, m: dict) -> None:
         if not bool(val) or not type(val) is str or val == "none":
             val = "null"
         else:
-            val = fitz.get_pdf_str(val)
+            val = get_pdf_str(val)
         doc.xref_set_key(info_xref, pdf_key, val)
     doc.init_doc()
     return
@@ -3813,7 +3813,7 @@ def apply_redactions(page: Page, images: int = 2) -> bool:
         if not text:
             return annot_rect
         try:
-            text_width = getTextlength(text, font, fsize)
+            text_width = get_text_length(text, font, fsize)
         except ValueError:  # unsupported font
             return annot_rect
         line_height = fsize * 1.2
@@ -4043,8 +4043,8 @@ def fill_textbox(
 
     Args:
         writer: TextWriter object (= "self")
-        text: string or list/tuple of strings.
         rect: rect-like to receive the text.
+        text: string or list/tuple of strings.
         pos: point-like start position of first word.
         font: Font object (default Font('helv')).
         fontsize: the fontsize.
@@ -4060,7 +4060,10 @@ def fill_textbox(
         font = Font("helv")
 
     def textlen(x):
-        return font.text_length(x, fontsize)  # abbreviation
+        return font.text_length(x, fontsize=fontsize)  # abbreviation
+
+    def char_lengths(x):
+        return font.char_lengths(x, fontsize=fontsize)
 
     def append_this(pos, text):
         return writer.append(pos, text, font=font, fontsize=fontsize)
@@ -4071,29 +4074,30 @@ def fill_textbox(
     std_start = rect.x0 + tolerance
 
     def norm_words(width, words):
-        """Cut any word in pieces that is longer than 'width'."""
+        """Cut any word in pieces no longer than 'width'."""
         nwords = []
+        word_lengths = []
         for w in words:
-            wl = textlen(w)
+            wl_lst = char_lengths(w)
+            wl = sum(wl_lst)
             if wl <= width:  # nothing to do - copy over
                 nwords.append(w)
+                word_lengths.append(wl)
                 continue
-            # word longer than rect width - look at single chars
-            wl_lst = [textlen(c) for c in w]  # lengths of chars
-            while True:
-                wls = 0  # length of word piece
-                for i in range(len(wl_lst)):
-                    wls += wl_lst[i]
-                    if wls > width:
-                        break
 
-                if i == len(wl_lst) - 1:  # reached end of the word?
-                    nwords.append(w)
-                    break
-                nwords.append(w[:i])  # output word segment
-                w = w[i:]  # remainder of word
-                wl_lst = wl_lst[i:]  # remainder of char lengths
-        return nwords
+            # word longer than rect width - split it in parts
+            n = len(wl_lst)
+            while n > 0:
+                wl = sum(wl_lst[:n])
+                if wl <= width:
+                    nwords.append(w[: n + 1])
+                    word_lengths.append(wl)
+                    w = w[n + 1 :]
+                    wl_lst = wl_lst[n + 1 :]
+                    n = len(wl_lst)
+                else:
+                    n -= 1
+        return nwords, word_lengths
 
     def output_justify(start, line):
         """Justified output of a line."""
@@ -4128,8 +4132,6 @@ def fill_textbox(
     # starting point of text
     if pos is not None:
         pos = Point(pos)
-        if not pos in rect:
-            raise ValueError("'pos' must be inside 'rect'")
     else:  # default is just below rect top-left
         pos = rect.tl + (tolerance, fontsize * asc)
     if not pos in rect:
@@ -4144,7 +4146,7 @@ def fill_textbox(
         factor = 0
 
     # split in lines if just a string was given
-    if type(text) not in (tuple, list):
+    if type(text) is str:
         textlines = text.splitlines()
     else:
         textlines = []
@@ -4154,7 +4156,7 @@ def fill_textbox(
     max_lines = int((rect.y1 - pos.y) / (lheight * fontsize))
 
     new_lines = []  # the final list of textbox lines
-    no_justify = []  # do not justify these line numbers
+    no_justify = []  # no justify for these line numbers
     for i, line in enumerate(textlines):
         if line in ("", " "):
             new_lines.append((line, space_len))
@@ -4169,7 +4171,7 @@ def fill_textbox(
         if right_to_left:  # reverses Arabic / Hebrew text front to back
             line = writer.clean_rtl(line)
         tl = textlen(line)
-        if textlen(line) <= width:  # line short enough
+        if tl <= width:  # line short enough
             new_lines.append((line, tl))
             no_justify.append((len(new_lines) - 1))
             continue
@@ -4178,22 +4180,23 @@ def fill_textbox(
         words = line.split(" ")  # the words in the line
 
         # cut in parts any words that are longer than rect width
-        words = norm_words(std_width, words)
+        words, word_lengths = norm_words(std_width, words)
 
-        j = 1
-        while len(words) > 0:
-            line0 = " ".join(words[:-j]) if j > 0 else " ".join(words)
-            tl = textlen(line0)
-            if tl <= width:
-                new_lines.append((line0, tl))  # shortened line fits
-                if j == 0:  # this was the last part of line
-                    no_justify.append((len(new_lines) - 1))
-                    break
-                del words[:-j]
-                j = 0
-                width = rect.width - tolerance
+        n = len(words)
+        while True:
+            line0 = " ".join(words[:n])
+            wl = sum(word_lengths[:n]) + space_len * (len(word_lengths[:n]) - 1)
+            if wl <= width:
+                new_lines.append((line0, wl))
+                words = words[n:]
+                word_lengths = word_lengths[n:]
+                n = len(words)
+                line0 = None
             else:
-                j += 1
+                n -= 1
+
+            if len(words) == 0:
+                break
 
     nlines = len(new_lines)
     if nlines > max_lines:
@@ -4704,8 +4707,8 @@ def recover_bbox_quad(line_dir: tuple, span: dict, bbox: tuple) -> Quad:
 
     height = d * span["size"]  # the quad's rectangle height
     # The following are distances from the bbox corners, at wich we find the
-    # respective quad points. The calculation depends, on in which circle
-    # quadrant the text writing angle is positioned.
+    # respective quad points. The computat depends on in which circle
+    # quadrant the text writing angle is located.
     hs = height * sin
     hc = height * cos
     if hc >= 0 and hs <= 0:  # quadrant 1
@@ -4776,7 +4779,7 @@ def recover_line_quad(line: dict, spans: list = None) -> Quad:
     line_ll = q0.ll  # lower-left of line quad
     line_lr = q1.lr  # lower-right of line quad
 
-    mat0 = planishLine(line_ll, line_lr)
+    mat0 = planish_line(line_ll, line_lr)
 
     # map base line to x-axis such that line_ll goes to (0, 0)
     x_lr = line_lr * mat0
@@ -4823,7 +4826,7 @@ def recover_span_quad(line_dir: tuple, span: dict, chars: list = None) -> Quad:
 
     span_ll = q0.ll  # lower-left of span quad
     span_lr = q1.lr  # lower-right of span quad
-    mat0 = planishLine(span_ll, span_lr)
+    mat0 = planish_line(span_ll, span_lr)
     # map base line to x-axis such that span_ll goes to (0, 0)
     x_lr = span_lr * mat0
 

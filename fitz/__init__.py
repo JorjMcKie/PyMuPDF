@@ -151,15 +151,18 @@ def restore_aliases():
 
     def _alias(fitz_class, old, new):
         fname = getattr(fitz_class, new)
+        r = str(fitz_class)[1:-1]
+        objname = " ".join(r.split()[:2])
+        objname = objname.replace("fitz.fitz.", "")
+        objname = objname.replace("fitz.utils.", "")
         if callable(fname):
 
             def deprecated_function(*args, **kw):
-                msg = "removed from %s in version after 1.19.0 - use '%s'." % (
-                    fitz_class,
+                msg = "'%s' removed from %s after v1.19.0 - use '%s'." % (
+                    old,
+                    objname,
                     new,
                 )
-                msg = msg.replace("fitz.fitz.", "").replace("<", "").replace(">", "")
-                msg = msg.replace("fitz.utils.", "")
                 warnings.warn(msg, category=FitzDeprecation)
                 return fname(*args, **kw)
 
@@ -171,11 +174,14 @@ def restore_aliases():
         x = fname.__doc__
         if not x:
             x = ""
-        eigen.__doc__ = (
-            "*** Deprecated, will be removed in version following 1.19.0 - use '%s'. ***\n"
-            % new
-            + x
-        )
+        try:
+            eigen.__doc__ = (
+                "*** Deprecated, will be removed in version following 1.19.0 - use '%s'. ***\n"
+                % new
+                + x
+            )
+        except:
+            pass
 
     # deprecated Document aliases
     _alias(fitz.Document, "chapterCount", "chapter_count")
@@ -381,6 +387,12 @@ def restore_aliases():
     # deprecated other aliases
     _alias(fitz, "getPDFstr", "get_pdf_str")
     _alias(fitz, "getPDFnow", "get_pdf_now")
+    _alias(fitz, "PaperSize", "paper_size")
+    _alias(fitz, "PaperRect", "paper_rect")
+    _alias(fitz, "paperSizes", "paper_sizes")
+    _alias(fitz, "ImageProperties", "image_properties")
+    _alias(fitz, "planishLine", "planish_line")
+    _alias(fitz, "getTextLength", "get_text_length")
 
 
 fitz.__doc__ = """
