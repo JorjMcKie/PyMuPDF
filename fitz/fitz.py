@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.14"
-VersionDate = "2021-05-07 09:56:30"
-version = (VersionBind, VersionFitz, "20210507095630")
+VersionDate = "2021-05-17 19:46:05"
+version = (VersionBind, VersionFitz, "20210517194605")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -1132,7 +1132,8 @@ class Rect(object):
             if r.x0 <= x[0] <= r.x1 and r.y0 <= x[1] <= r.y1:
                 return True
             return False
-        return False
+        msg = "bad type or sequence: '%s'" % repr(x)
+        raise ValueError(msg)
 
     def __or__(self, x):
         if not hasattr(x, "__len__"):
@@ -1193,15 +1194,18 @@ class IRect(Rect):
 
     def includePoint(self, p):
         """Extend rectangle to include point p."""
-        return Rect.includePoint(self, p).round()
+        rect = self.rect.includePoint(p)
+        return rect.irect
 
     def includeRect(self, r):
         """Extend rectangle to include rectangle r."""
-        return Rect.includeRect(self, r).round()
+        rect = self.rect.includeRect(r)
+        return rect.irect
 
     def intersect(self, r):
         """Restrict rectangle to intersection with rectangle r."""
-        return Rect.intersect(self, r).round()
+        rect = self.rect.intersect(r)
+        return rect.irect
 
     def __setitem__(self, i, v):
         v = int(v)
@@ -1298,43 +1302,22 @@ class Quad(object):
         """Check if quad is convex and not degenerate.
 
         Notes:
-            For convexity, every line connecting two points of the quad must be
-            inside the quad. This is equivalent to that every corner encloses
-            an angle with 0 < angle < 180 degrees.
-            Excluding the "degenerate" case (all corners on same line),
-            it suffices to check that the sines of three angles are > 0.
+            Check that for the two diagonals, the other two corners are not
+            on the same side of the diagonal.
         Returns:
             True or False.
         """
-        count = 0
-        sine = TOOLS._sine_between(self.ul, self.ur, self.lr)
-        if sine > 0:
-            count += 1
-        elif sine < 0:
+        m = planish_line(self.ul, self.lr)  # puts this diagonal on x-axis
+        p1 = self.ll * m  # transform the
+        p2 = self.ur * m  # other two points
+        if p1.y > 0 and p2.y > 0 or p1.y < 0 and p2.y < 0:
             return False
-
-        sine = TOOLS._sine_between(self.ur, self.lr, self.ll)
-        if sine > 0:
-            count += 1
-        elif sine < 0:
+        m = planish_line(self.ll, self.ur)  # put other diagonal on x-axis
+        p1 = self.lr * m  # tranform the
+        p2 = self.ul * m  # remaining points
+        if p1.y > 0 and p2.y > 0 or p1.y < 0 and p2.y < 0:
             return False
-
-        sine = TOOLS._sine_between(self.lr, self.ll, self.ul)
-        if sine > 0:
-            count += 1
-        elif sine < 0:
-            return False
-
-        sine = TOOLS._sine_between(self.ll, self.ul, self.ur)
-        if sine > 0:
-            count += 1
-        elif sine < 0:
-            return False
-
-        if count >= 2:
-            return True
-
-        return False
+        return True
 
     width = property(lambda self: max(abs(self.ul - self.ur), abs(self.ll - self.lr)))
     height = property(lambda self: max(abs(self.ul - self.ll), abs(self.ur - self.lr)))

@@ -9659,7 +9659,7 @@ SWIGINTERN PyObject *Document__embfile_upd(struct Document *self,int idx,PyObjec
                 if (!filespec) THROWMSG(gctx, "bad PDF: /EF object not found");
                 res = JM_BufferFromBytes(gctx, buffer);
                 if (EXISTS(buffer) && !res) THROWMSG(gctx, "bad type: 'buffer'");
-                if (res)
+                if (res && buffer != Py_None)
                 {
                     JM_update_stream(gctx, pdf, filespec, res, 1);
                     // adjust /DL and /Size parameters
@@ -12605,7 +12605,14 @@ SWIGINTERN PyObject *Page__insert_image(struct Page *self,char *filename,struct 
 
             // process stream ---------------------------------
             have_stream:;
-                fz_md5_buffer(gctx, imgbuf, digest);
+                fz_md5 state;
+                fz_md5_init(&state);
+                fz_md5_update(&state, imgbuf->data, imgbuf->len);
+                if (EXISTS(imask)) {
+                    maskbuf = JM_BufferFromBytes(gctx, imask);
+                    fz_md5_update(&state, maskbuf->data, maskbuf->len);
+                }
+                fz_md5_final(&state, digest);
                 md5_py = PyBytes_FromStringAndSize(digest, 16);
                 temp = PyDict_GetItem(digests, md5_py);
                 if (temp) {
@@ -12650,7 +12657,6 @@ SWIGINTERN PyObject *Page__insert_image(struct Page *self,char *filename,struct 
                 bpc = image->bpc;
                 fz_colorspace *colorspace = image->colorspace;
                 fz_image_resolution(image, &xres, &yres);
-                maskbuf = JM_BufferFromBytes(gctx, imask);
                 mask = fz_new_image_from_buffer(gctx, maskbuf);
                 zimg = fz_new_image_from_compressed_buffer(gctx, w, h,
                             bpc, colorspace, xres, yres, 1, 0, NULL,
@@ -14989,7 +14995,7 @@ SWIGINTERN PyObject *Font_glyph_advance(struct Font *self,int chr,char *language
             return PyFloat_FromDouble((double) fz_advance_glyph(gctx, font, gid, wmode));
         }
 SWIGINTERN PyObject *Font_text_length(struct Font *self,PyObject *text,double fontsize,char *language,int script,int wmode){
-            fz_font *font, *thisfont = (fz_font *) self;
+            fz_font *font=NULL, *thisfont = (fz_font *) self;
             fz_text_language lang = fz_text_language_from_string(language);
             double rc = 0;
             fz_try(gctx) {
@@ -15027,7 +15033,8 @@ SWIGINTERN PyObject *Font_char_lengths(struct Font *self,PyObject *text,double f
                 for (i = 0; i < len; i++) {
                     int c = PyUnicode_READ(kind, data, i);
                     int gid = fz_encode_character_with_fallback(gctx,thisfont, c, script, lang, &font);
-                    PyTuple_SET_ITEM(rc, i, PyFloat_FromDouble((double) fontsize * fz_advance_glyph(gctx, font, gid, wmode)));
+                    PyTuple_SET_ITEM(rc, i,
+                        PyFloat_FromDouble(fontsize * (double) fz_advance_glyph(gctx, font, gid, wmode)));
                 }
             }
             fz_catch(gctx) {
