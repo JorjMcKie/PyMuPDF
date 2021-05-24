@@ -46,18 +46,18 @@ fitz.Document.get_ocmd = fitz.utils.get_ocmd
 fitz.Document.get_page_labels = fitz.utils.get_page_labels
 fitz.Document.get_page_numbers = fitz.utils.get_page_numbers
 fitz.Document.get_page_pixmap = fitz.utils.get_page_pixmap
-fitz.Document.get_page_text = fitz.utils.getPageText
-fitz.Document.get_toc = fitz.utils.getToC
+fitz.Document.get_page_text = fitz.utils.get_page_text
+fitz.Document.get_toc = fitz.utils.get_toc
 fitz.Document.has_annots = fitz.utils.has_annots
 fitz.Document.has_links = fitz.utils.has_links
-fitz.Document.insert_page = fitz.utils.insertPage
-fitz.Document.new_page = fitz.utils.newPage
+fitz.Document.insert_page = fitz.utils.insert_page
+fitz.Document.new_page = fitz.utils.new_page
 fitz.Document.scrub = fitz.utils.scrub
-fitz.Document.search_page_for = fitz.utils.searchPageFor
+fitz.Document.search_page_for = fitz.utils.search_page_for
 fitz.Document.set_metadata = fitz.utils.set_metadata
 fitz.Document.set_ocmd = fitz.utils.set_ocmd
 fitz.Document.set_page_labels = fitz.utils.set_page_labels
-fitz.Document.set_toc = fitz.utils.setToC
+fitz.Document.set_toc = fitz.utils.set_toc
 fitz.Document.set_toc_item = fitz.utils.set_toc_item
 fitz.Document.tobytes = fitz.Document.write
 fitz.Document.subset_fonts = fitz.utils.subset_fonts
@@ -69,7 +69,7 @@ fitz.Document.set_oc = fitz.utils.set_oc
 # Page
 # ------------------------------------------------------------------------------
 fitz.Page.apply_redactions = fitz.utils.apply_redactions
-fitz.Page.delete_widget = fitz.utils.deleteWidget
+fitz.Page.delete_widget = fitz.utils.delete_widget
 fitz.Page.draw_bezier = fitz.utils.draw_bezier
 fitz.Page.draw_circle = fitz.utils.draw_circle
 fitz.Page.draw_curve = fitz.utils.draw_curve
@@ -83,20 +83,20 @@ fitz.Page.draw_squiggle = fitz.utils.draw_squiggle
 fitz.Page.draw_zigzag = fitz.utils.draw_zigzag
 fitz.Page.get_links = fitz.utils.get_links
 fitz.Page.get_pixmap = fitz.utils.get_pixmap
-fitz.Page.get_text = fitz.utils.getText
+fitz.Page.get_text = fitz.utils.get_text
 fitz.Page.get_image_info = fitz.utils.get_image_info
-fitz.Page.get_text_blocks = fitz.utils.getTextBlocks
-fitz.Page.get_text_selection = fitz.utils.getTextSelection
-fitz.Page.get_text_words = fitz.utils.getTextWords
-fitz.Page.get_textbox = fitz.utils.getTextbox
+fitz.Page.get_text_blocks = fitz.utils.get_text_blocks
+fitz.Page.get_text_selection = fitz.utils.get_text_selection
+fitz.Page.get_text_words = fitz.utils.get_text_words
+fitz.Page.get_textbox = fitz.utils.get_textbox
 fitz.Page.insert_image = fitz.utils.insert_image
-fitz.Page.insert_link = fitz.utils.insertLink
+fitz.Page.insert_link = fitz.utils.insert_link
 fitz.Page.insert_text = fitz.utils.insert_text
 fitz.Page.insert_textbox = fitz.utils.insert_textbox
 fitz.Page.new_shape = lambda x: fitz.utils.Shape(x)
-fitz.Page.search_for = fitz.utils.searchFor
+fitz.Page.search_for = fitz.utils.search_for
 fitz.Page.show_pdf_page = fitz.utils.show_pdf_page
-fitz.Page.update_link = fitz.utils.updateLink
+fitz.Page.update_link = fitz.utils.update_link
 fitz.Page.write_text = fitz.utils.write_text
 fitz.Page.get_label = fitz.utils.get_label
 fitz.Page.get_image_rects = fitz.utils.get_image_rects
@@ -104,21 +104,14 @@ fitz.Page.get_image_rects = fitz.utils.get_image_rects
 # ------------------------------------------------------------------------
 # Annot
 # ------------------------------------------------------------------------
-fitz.Annot.get_text = fitz.utils.getText
-fitz.Annot.get_textbox = fitz.utils.getTextbox
+fitz.Annot.get_text = fitz.utils.get_text
+fitz.Annot.get_textbox = fitz.utils.get_textbox
 
 # ------------------------------------------------------------------------
-# Rect
+# Rect and IRect
 # ------------------------------------------------------------------------
-fitz.Rect.getRectArea = fitz.utils.getRectArea
-fitz.Rect.getArea = fitz.utils.getRectArea
-
-# ------------------------------------------------------------------------
-# IRect
-# ------------------------------------------------------------------------
-
-fitz.IRect.getRectArea = fitz.utils.getRectArea
-fitz.IRect.getArea = fitz.utils.getRectArea
+fitz.Rect.get_area = fitz.utils.get_area
+fitz.IRect.get_area = fitz.utils.get_area
 
 # ------------------------------------------------------------------------
 # TextWriter
@@ -163,7 +156,8 @@ def restore_aliases():
                     objname,
                     new,
                 )
-                warnings.warn(msg, category=FitzDeprecation)
+                if not VersionBind.startswith("1.18"):
+                    warnings.warn(msg, category=FitzDeprecation)
                 return fname(*args, **kw)
 
             setattr(fitz_class, old, deprecated_function)
@@ -175,11 +169,12 @@ def restore_aliases():
         if not x:
             x = ""
         try:
-            eigen.__doc__ = (
-                "*** Deprecated, will be removed in version following 1.19.0 - use '%s'. ***\n"
-                % new
-                + x
-            )
+            if callable(fname):
+                eigen.__doc__ = (
+                    "*** Deprecated, will be removed in version following 1.19.0 - use '%s'. ***\n"
+                    % new
+                    + x
+                )
         except:
             pass
 
@@ -383,6 +378,28 @@ def restore_aliases():
     _alias(fitz.Pixmap, "setOrigin", "set_origin")
     _alias(fitz.Pixmap, "setRect", "set_rect")
     _alias(fitz.Pixmap, "setResolution", "set_dpi")
+
+    # deprecated geometry aliases
+    _alias(fitz.Rect, "getArea", "get_area")
+    _alias(fitz.IRect, "getArea", "get_area")
+    _alias(fitz.Rect, "getRectArea", "get_area")
+    _alias(fitz.IRect, "getRectArea", "get_area")
+    _alias(fitz.Rect, "includePoint", "include_point")
+    _alias(fitz.IRect, "includePoint", "include_point")
+    _alias(fitz.Rect, "includeRect", "include_rect")
+    _alias(fitz.IRect, "includeRect", "include_rect")
+    _alias(fitz.Rect, "isInfinite", "is_infinite")
+    _alias(fitz.IRect, "isInfinite", "is_infinite")
+    _alias(fitz.Rect, "isEmpty", "is_empty")
+    _alias(fitz.IRect, "isEmpty", "is_empty")
+    _alias(fitz.Quad, "isEmpty", "is_empty")
+    _alias(fitz.Quad, "isRectangular", "is_rectangular")
+    _alias(fitz.Quad, "isConvex", "is_convex")
+    _alias(fitz.Matrix, "isRectilinear", "is_rectilinear")
+    _alias(fitz.Matrix, "preRotate", "prerotate")
+    _alias(fitz.Matrix, "preScale", "prescale")
+    _alias(fitz.Matrix, "preShear", "preshear")
+    _alias(fitz.Matrix, "preTranslate", "pretranslate")
 
     # deprecated other aliases
     _alias(fitz, "getPDFstr", "get_pdf_str")

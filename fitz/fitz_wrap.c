@@ -13917,22 +13917,21 @@ SWIGINTERN PyObject *Annot__update_appearance(struct Annot *self,float opacity,c
             pdf_annot *annot = (pdf_annot *) self;
             int type = pdf_annot_type(gctx, annot);
             float fcol[4] = {1,1,1,1};  // std fill color: white
-            int nfcol = 0;  // number of color components
+            int i, nfcol = 0;  // number of color components
             JM_color_FromSequence(fill_color, &nfcol, fcol);
             fz_try(gctx) {
-                pdf_dirty_annot(gctx, annot); // enforce MuPDF /AP formatting
-                if (type == PDF_ANNOT_FREE_TEXT) {
-                    if (EXISTS(fill_color)) {
-                        pdf_set_annot_color(gctx, annot, nfcol, fcol);
-                    } else {
-                        pdf_dict_del(gctx, annot->obj, PDF_NAME(IC));
-                    }
-                } else {
-                    if (EXISTS(fill_color)) {
-                        pdf_set_annot_interior_color(gctx, annot, nfcol, fcol);
-                    } else if (fill_color != Py_None) {
-                        pdf_dict_del(gctx, annot->obj, PDF_NAME(IC));
-                    }
+                pdf_dirty_annot(gctx, annot); // enforce new /AP
+                // remove fill color from unsupported annots
+                // or if so requested
+                if (type != PDF_ANNOT_SQUARE
+                    && type != PDF_ANNOT_CIRCLE
+                    && type != PDF_ANNOT_LINE
+                    && type != PDF_ANNOT_POLY_LINE
+                    && type != PDF_ANNOT_POLYGON
+                    || nfcol == 0 && fill_color != Py_None) {
+                    pdf_dict_del(gctx, annot->obj, PDF_NAME(IC));
+                } else if (nfcol > 0) {
+                    pdf_set_annot_interior_color(gctx, annot, nfcol, fcol);
                 }
 
                 int insert_rot = (rotate >= 0) ? 1 : 0;
@@ -13951,11 +13950,25 @@ SWIGINTERN PyObject *Annot__update_appearance(struct Annot *self,float opacity,c
                     default: insert_rot = 0;
                 }
 
-                if (insert_rot)
+                if (insert_rot) {
                     pdf_dict_put_int(gctx, annot->obj, PDF_NAME(Rotate), rotate);
-                annot->needs_new_ap = 1;  // re-create appearance stream
-                pdf_update_annot(gctx, annot);  // update the annotation
+                }
 
+                annot->needs_new_ap = 1;  // re-create appearance stream
+                pdf_update_annot(gctx, annot);  // let MuPDF update
+
+                // insert fill color
+                if (type == PDF_ANNOT_FREE_TEXT) {
+                    if (nfcol > 0) {
+                        pdf_set_annot_color(gctx, annot, nfcol, fcol);
+                    }
+                } else if (nfcol > 0) {
+                    pdf_obj *col = pdf_new_array(gctx, annot->page->doc, nfcol);
+                    for (i = 0; i < nfcol; i++) {
+                        pdf_array_push_real(gctx, col, fcol[i]);
+                    }
+                    pdf_dict_put_drop(gctx,annot->obj, PDF_NAME(IC), col);
+                }
             }
             fz_catch(gctx) {
                 PySys_WriteStderr("cannot update annot: '%s'\n", fz_caught_message(gctx));

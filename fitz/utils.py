@@ -75,7 +75,7 @@ def write_text(page: Page, **kwargs) -> None:
             writers = (writers,)
     clip = writers[0].text_rect
     textdoc = Document()
-    tpage = textdoc.newPage(width=page.rect.width, height=page.rect.height)
+    tpage = textdoc.new_page(width=page.rect.width, height=page.rect.height)
     for writer in writers:
         clip |= writer.text_rect
         writer.write_text(tpage, opacity=opacity, color=color)
@@ -166,7 +166,7 @@ def show_pdf_page(*args, **kwargs) -> int:
         raise ValueError("not a PDF")
 
     rect = page.rect & rect  # intersect with page rectangle
-    if rect.isEmpty or rect.isInfinite:
+    if rect.is_empty or rect.is_infinite:
         raise ValueError("rect must be finite and not empty")
 
     if reuse_xref > 0:
@@ -181,7 +181,7 @@ def show_pdf_page(*args, **kwargs) -> int:
     tar_rect = rect * ~page.transformation_matrix  # target rect in PDF coordinates
 
     src_rect = src_page.rect if not clip else src_page.rect & clip  # source rect
-    if src_rect.isEmpty or src_rect.isInfinite:
+    if src_rect.is_empty or src_rect.is_infinite:
         raise ValueError("clip must be finite and not empty")
     src_rect = src_rect * ~src_page.transformation_matrix  # ... in PDF coord
 
@@ -325,7 +325,7 @@ def insert_image(page, rect, **kwargs):
         raise ValueError("bad rotate value")
 
     r = Rect(rect)
-    if r.isEmpty or r.isInfinite:
+    if r.is_empty or r.is_infinite:
         raise ValueError("rect must be finite and not empty")
     clip = r * ~page.transformation_matrix
 
@@ -366,7 +366,7 @@ def insert_image(page, rect, **kwargs):
     return xref
 
 
-def searchFor(*args, **kwargs) -> list:
+def search_for(*args, **kwargs) -> list:
     """Search for a string on a page.
 
     Args:
@@ -393,7 +393,7 @@ def searchFor(*args, **kwargs) -> list:
     return rlist
 
 
-def searchPageFor(
+def search_page_for(
     doc: Document,
     pno: int,
     text: str,
@@ -414,7 +414,7 @@ def searchPageFor(
         a list of rectangles or quads, each containing an occurrence.
     """
 
-    return doc[pno].searchFor(
+    return doc[pno].search_for(
         text,
         quads=quads,
         clip=clip,
@@ -422,7 +422,7 @@ def searchPageFor(
     )
 
 
-def getTextBlocks(
+def get_text_blocks(
     page: Page,
     clip: rect_like = None,
     flags: OptInt = None,
@@ -446,7 +446,7 @@ def getTextBlocks(
     return blocks
 
 
-def getTextWords(
+def get_text_words(
     page: Page,
     clip: rect_like = None,
     flags: OptInt = None,
@@ -465,7 +465,7 @@ def getTextWords(
     return words
 
 
-def getTextbox(
+def get_textbox(
     page: Page,
     rect: rect_like,
 ) -> str:
@@ -475,7 +475,7 @@ def getTextbox(
     return rc
 
 
-def getTextSelection(
+def get_text_selection(
     page: Page,
     p1: point_like,
     p2: point_like,
@@ -562,7 +562,7 @@ def get_image_rects(page: Page, name, transform=False) -> list:
     return bboxes
 
 
-def getText(
+def get_text(
     page: Page,
     option: str = "text",
     clip: rect_like = None,
@@ -578,7 +578,7 @@ def getText(
         flags: bit switches to e.g. exclude images or decompose ligatures
 
     Returns:
-        the output of methods getTextWords / getTextBlocks or TextPage
+        the output of methods get_text_words / get_text_blocks or TextPage
         methods extractText, extractHTML, extractDICT, extractJSON, extractRAWDICT,
         extractXHTML or etractXML respectively.
         Default and misspelling choice is "text".
@@ -604,9 +604,9 @@ def getText(
             flags += TEXT_PRESERVE_IMAGES
 
     if option == "words":
-        return getTextWords(page, clip=clip, flags=flags)
+        return get_text_words(page, clip=clip, flags=flags)
     if option == "blocks":
-        return getTextBlocks(page, clip=clip, flags=flags)
+        return get_text_blocks(page, clip=clip, flags=flags)
     CheckParent(page)
     cb = None
     if option in ("html", "xml", "xhtml"):  # no clipping for MuPDF functions
@@ -640,7 +640,7 @@ def getText(
     return t
 
 
-def getPageText(
+def get_page_text(
     doc: Document,
     pno: int,
     option: str = "text",
@@ -650,14 +650,14 @@ def getPageText(
     """Extract a document page's text by page number.
 
     Notes:
-        Convenience function calling page.getText().
+        Convenience function calling page.get_text().
     Args:
         pno: page number
         option: (str) text, words, blocks, html, dict, json, rawdict, xhtml or xml.
     Returns:
         output from page.TextPage().
     """
-    return doc[pno].getText(option, clip=clip, flags=flags)
+    return doc[pno].get_text(option, clip=clip, flags=flags)
 
 
 def get_pixmap(page: Page, **kw) -> Pixmap:
@@ -776,20 +776,13 @@ def get_links(page: Page) -> list:
     """
 
     CheckParent(page)
-    ln = page.firstLink
+    ln = page.first_link
     links = []
     while ln:
         nl = getLinkDict(ln)
-        # if nl["kind"] == LINK_GOTO:
-        #    if type(nl["to"]) is Point and nl["page"] >= 0:
-        #        doc = page.parent
-        #        target_page = doc[nl["page"]]
-        #        ctm = target_page.transformation_matrix
-        #        point = nl["to"] * ctm
-        #        nl["to"] = point
         links.append(nl)
         ln = ln.next
-    if len(links) > 0:
+    if links != []:
         linkxrefs = [x for x in page.annot_xrefs() if x[1] == PDF_ANNOT_LINK]
         if len(linkxrefs) == len(links):
             for i in range(len(linkxrefs)):
@@ -798,7 +791,7 @@ def get_links(page: Page) -> list:
     return links
 
 
-def getToC(
+def get_toc(
     doc: Document,
     simple: bool = True,
 ) -> list:
@@ -881,13 +874,13 @@ def set_toc_item(
     It allows changing the item's title and link destination.
 
     Args:
-        idx: (int) desired index of the TOC list, as created by getTOC.
-        dest_dict: (dict) destination dictionary as created by getTOC(False).
+        idx: (int) desired index of the TOC list, as created by get_toc.
+        dest_dict: (dict) destination dictionary as created by get_toc(False).
             Outrules all other parameters. If None, the remaining parameters
             are used to make a dest dictionary.
         kind: (int) kind of link (LINK_GOTO, etc.). If None, then only the
             title will be updated. If LINK_NONE, the TOC item will be deleted.
-        pno: (int) page number (1-based like in getTOC). Required if LINK_GOTO.
+        pno: (int) page number (1-based like in get_toc). Required if LINK_GOTO.
         uri: (str) the URL, required if LINK_URI.
         title: (str) the new title. No change if None.
         to: (point-like) destination on the target page. If omitted, (72, 36)
@@ -961,7 +954,7 @@ def set_toc_item(
     return doc._update_toc_item(xref, action=action[2:], title=title)
 
 
-def getRectArea(*args) -> float:
+def get_area(*args) -> float:
     """Calculate area of rectangle.\nparameter is one of 'px' (default), 'in', 'cm', or 'mm'."""
     rect = args[0]
     if len(args) > 1:
@@ -1095,7 +1088,7 @@ def getDestStr(xref: int, ddict: dict) -> str:
     return ""
 
 
-def setToC(
+def set_toc(
     doc: Document,
     toc: list,
     collapse: int = 1,
@@ -1463,14 +1456,14 @@ def getLinkText(page: Page, lnk: dict) -> str:
     return annot
 
 
-def deleteWidget(page: Page, widget: Widget) -> Widget:
+def delete_widget(page: Page, widget: Widget) -> Widget:
     """Delete widget from page and return the next one."""
     CheckParent(page)
     annot = getattr(widget, "_annot", None)
     if annot is None:
         raise ValueError("bad type: widget")
     nextwidget = widget.next
-    page.deleteAnnot(annot)
+    page.delete_annot(annot)
     widget._annot.__del__()
     widget._annot.parent = None
     keylist = list(widget.__dict__.keys())
@@ -1479,7 +1472,7 @@ def deleteWidget(page: Page, widget: Widget) -> Widget:
     return nextwidget
 
 
-def updateLink(page: Page, lnk: dict) -> None:
+def update_link(page: Page, lnk: dict) -> None:
     """ Update a link on the current page. """
     CheckParent(page)
     annot = getLinkText(page, lnk)
@@ -1490,7 +1483,7 @@ def updateLink(page: Page, lnk: dict) -> None:
     return
 
 
-def insertLink(page: Page, lnk: dict, mark: bool = True) -> None:
+def insert_link(page: Page, lnk: dict, mark: bool = True) -> None:
     """ Insert a new link for the current page. """
     CheckParent(page)
     annot = getLinkText(page, lnk)
@@ -1617,7 +1610,7 @@ def insert_text(
     return rc
 
 
-def newPage(
+def new_page(
     doc: Document,
     pno: int = -1,
     width: float = 595,
@@ -1636,7 +1629,7 @@ def newPage(
     return doc[pno]
 
 
-def insertPage(
+def insert_page(
     doc: Document,
     pno: int,
     text: typing.Union[str, list, None] = None,
@@ -1653,7 +1646,7 @@ def insertPage(
         Function combining Document.new_page() and Page.insert_text().
         For parameter details see these methods.
     """
-    page = doc.newPage(pno=pno, width=width, height=height)
+    page = doc.new_page(pno=pno, width=width, height=height)
     if not bool(text):
         return 0
     rc = page.insert_text(
@@ -3394,7 +3387,7 @@ class Shape(object):
             unused or deficit rectangle area (float)
         """
         rect = Rect(rect)
-        if rect.isEmpty or rect.isInfinite:
+        if rect.is_empty or rect.is_infinite:
             raise ValueError("text box must be finite and not empty")
 
         color_str = ColorCode(color, "c")
@@ -4054,7 +4047,7 @@ def fill_textbox(
         right_to_left: (bool) indicate right-to-left language.
     """
     rect = Rect(rect)
-    if rect.isEmpty or rect.isInfinite:
+    if rect.is_empty or rect.is_infinite:
         raise ValueError("fill rect must be finite and not empty.")
     if type(font) is not Font:
         font = Font("helv")

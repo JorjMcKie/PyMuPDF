@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.14"
-VersionDate = "2021-05-17 19:46:05"
-version = (VersionBind, VersionFitz, "20210517194605")
+VersionDate = "2021-05-24 14:20:24"
+version = (VersionBind, VersionFitz, "20210524142024")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -463,7 +463,7 @@ class Matrix(object):
         self.a, self.b, self.c, self.d, self.e, self.f = dst[1]
         return 0
 
-    def preTranslate(self, tx, ty):
+    def pretranslate(self, tx, ty):
         """Calculate pre translation and replace current matrix."""
         tx = float(tx)
         ty = float(ty)
@@ -471,7 +471,7 @@ class Matrix(object):
         self.f += tx * self.b + ty * self.d
         return self
 
-    def preScale(self, sx, sy):
+    def prescale(self, sx, sy):
         """Calculate pre scaling and replace current matrix."""
         sx = float(sx)
         sy = float(sy)
@@ -481,7 +481,7 @@ class Matrix(object):
         self.d *= sy
         return self
 
-    def preShear(self, h, v):
+    def preshear(self, h, v):
         """Calculate pre shearing and replace current matrix."""
         h = float(h)
         v = float(v)
@@ -492,7 +492,7 @@ class Matrix(object):
         self.d += h * b
         return self
 
-    def preRotate(self, theta):
+    def prerotate(self, theta):
         """Calculate pre rotation and replace current matrix."""
         theta = float(theta)
         while theta < 0:
@@ -660,7 +660,7 @@ class Matrix(object):
     norm = __abs__
 
     @property
-    def isRectilinear(self):
+    def is_rectilinear(self):
         """True if rectangles are mapped to rectangles."""
         return (abs(self.b) < EPSILON and abs(self.c) < EPSILON) or (
             abs(self.a) < EPSILON and abs(self.d) < EPSILON
@@ -684,10 +684,10 @@ class IdentityMatrix(Matrix):
     def checkargs(*args):
         raise NotImplementedError("Identity is readonly")
 
-    preRotate = checkargs
-    preShear = checkargs
-    preScale = checkargs
-    preTranslate = checkargs
+    prerotate = checkargs
+    preshear = checkargs
+    prescale = checkargs
+    pretranslate = checkargs
     concat = checkargs
     invert = checkargs
 
@@ -935,12 +935,12 @@ class Rect(object):
         return self
 
     @property
-    def isEmpty(self):
+    def is_empty(self):
         """True if rectangle area is empty."""
         return self.x0 == self.x1 or self.y0 == self.y1
 
     @property
-    def isInfinite(self):
+    def is_infinite(self):
         """True if rectangle is infinite."""
         return self.x0 > self.x1 or self.y0 > self.y1
 
@@ -994,14 +994,14 @@ class Rect(object):
     width = property(lambda self: abs(self.x1 - self.x0))
     height = property(lambda self: abs(self.y1 - self.y0))
 
-    def includePoint(self, p):
+    def include_point(self, p):
         """Extend to include point-like p."""
         if len(p) != 2:
             raise ValueError("bad Point: sequ. length")
         self.x0, self.y0, self.x1, self.y1 = TOOLS._include_point_in_rect(self, p)
         return self
 
-    def includeRect(self, r):
+    def include_rect(self, r):
         """Extend to include rect-like r."""
         if len(r) != 4:
             raise ValueError("bad Rect: sequ. length")
@@ -1067,7 +1067,7 @@ class Rect(object):
         return len(rect) == 4 and bool(self - rect) is False
 
     def __abs__(self):
-        if self.isEmpty or self.isInfinite:
+        if self.is_empty or self.is_infinite:
             return 0.0
         return (self.x1 - self.x0) * (self.y1 - self.y0)
 
@@ -1120,10 +1120,10 @@ class Rect(object):
         l = len(x)
         r = Rect(self).normalize()
         if l == 4:
-            if r.isEmpty:
+            if r.is_empty:
                 return False
             xr = Rect(x).normalize()
-            if xr.isEmpty:
+            if xr.is_empty:
                 return True
             if r.x0 <= xr.x0 and r.y0 <= xr.y0 and r.x1 >= xr.x1 and r.y1 >= xr.y1:
                 return True
@@ -1141,9 +1141,9 @@ class Rect(object):
 
         r = Rect(self)
         if len(x) == 2:
-            return r.includePoint(x)
+            return r.include_point(x)
         if len(x) == 4:
-            return r.includeRect(x)
+            return r.include_rect(x)
         raise ValueError("bad type op 2")
 
     def __and__(self, x):
@@ -1157,10 +1157,10 @@ class Rect(object):
     def intersects(self, x):
         """Check if intersection with rectangle x is not empty."""
         r1 = Rect(x)
-        if self.isEmpty or self.isInfinite or r1.isEmpty or r1.isInfinite:
+        if self.is_empty or self.is_infinite or r1.is_empty or r1.is_infinite:
             return False
         r = Rect(self)
-        if r.intersect(r1).isEmpty:
+        if r.intersect(r1).is_empty:
             return False
         return True
 
@@ -1192,14 +1192,14 @@ class IRect(Rect):
     def __repr__(self):
         return "IRect" + str(tuple(self))
 
-    def includePoint(self, p):
+    def include_point(self, p):
         """Extend rectangle to include point p."""
-        rect = self.rect.includePoint(p)
+        rect = self.rect.include_point(p)
         return rect.irect
 
-    def includeRect(self, r):
+    def include_rect(self, r):
         """Extend rectangle to include rectangle r."""
-        rect = self.rect.includeRect(r)
+        rect = self.rect.include_rect(r)
         return rect.irect
 
     def intersect(self, r):
@@ -1273,7 +1273,7 @@ class Quad(object):
         raise ValueError("bad Quad constructor")
 
     @property
-    def isRectangular(self) -> bool:
+    def is_rectangular(self) -> bool:
         """Check if quad is rectangular.
 
         Notes:
@@ -1298,7 +1298,7 @@ class Quad(object):
         return True
 
     @property
-    def isConvex(self) -> bool:
+    def is_convex(self) -> bool:
         """Check if quad is convex and not degenerate.
 
         Notes:
@@ -1310,12 +1310,12 @@ class Quad(object):
         m = planish_line(self.ul, self.lr)  # puts this diagonal on x-axis
         p1 = self.ll * m  # transform the
         p2 = self.ur * m  # other two points
-        if p1.y > 0 and p2.y > 0 or p1.y < 0 and p2.y < 0:
+        if p1.y * p2.y > 0:
             return False
-        m = planish_line(self.ll, self.ur)  # put other diagonal on x-axis
+        m = planish_line(self.ll, self.ur)  # puts other diagonal on x-axis
         p1 = self.lr * m  # tranform the
         p2 = self.ul * m  # remaining points
-        if p1.y > 0 and p2.y > 0 or p1.y < 0 and p2.y < 0:
+        if p1.y * p2.y > 0:
             return False
         return True
 
@@ -1323,7 +1323,7 @@ class Quad(object):
     height = property(lambda self: max(abs(self.ul - self.ll), abs(self.ur - self.lr)))
 
     @property
-    def isEmpty(self):
+    def is_empty(self):
         """Check whether all quad corners are on the same line.
 
         This is the case if width or height is zero.
@@ -1350,9 +1350,9 @@ class Quad(object):
             return False
         if CheckRect(x):
             r = Rect(x)
-            if r.isInfinite:
+            if r.is_infinite:
                 return False
-            if r.isEmpty:
+            if r.is_empty:
                 return True
             return TOOLS._point_in_quad(x[:2], self) and TOOLS._point_in_quad(
                 x[2:], self
@@ -1393,10 +1393,10 @@ class Quad(object):
         return Quad(-self.ul, -self.ur, -self.ll, -self.lr)
 
     def __bool__(self):
-        return not self.isEmpty
+        return not self.is_empty
 
     def __nonzero__(self):
-        return not self.isEmpty
+        return not self.is_empty
 
     def __eq__(self, quad):
         if not hasattr(quad, "__len__"):
@@ -1409,7 +1409,7 @@ class Quad(object):
         )
 
     def __abs__(self):
-        if self.isEmpty:
+        if self.is_empty:
             return 0.0
         return abs(self.ul - self.ur) * abs(self.ul - self.ll)
 
@@ -1418,7 +1418,7 @@ class Quad(object):
 
         Return a new quad."""
 
-        delta = Matrix(1, 1).preTranslate(p.x, p.y)
+        delta = Matrix(1, 1).pretranslate(p.x, p.y)
         q = self * ~delta * m * delta
         return q
 
@@ -1494,7 +1494,7 @@ class Widget(object):
 
     def _validate(self):
         """Validate the class entries."""
-        if self.rect.isInfinite or self.rect.isEmpty:
+        if self.rect.is_infinite or self.rect.is_empty:
             raise ValueError("bad rect")
 
         if not self.field_name:
@@ -2621,11 +2621,11 @@ def CheckRect(r: typing.Any) -> bool:
         r = Rect(r)
     except:
         return False
-    return not (r.isEmpty or r.isInfinite)
+    return not (r.is_empty or r.is_infinite)
 
 
 def CheckQuad(q: typing.Any) -> bool:
-    """Check whether an object is convex, not empty  quad-like.
+    """Check whether an object is convex, not empty quad-like.
 
     It must be a sequence of 4 number pairs.
     """
@@ -2633,7 +2633,7 @@ def CheckQuad(q: typing.Any) -> bool:
         q0 = Quad(q)
     except:
         return False
-    return q0.isConvex
+    return q0.is_convex
 
 
 def CheckMarkerArg(quads: typing.Any) -> tuple:
@@ -2800,40 +2800,6 @@ def ConversionTrailer(i: str):
     return r
 
 
-def DerotateRect(cropbox: rect_like, rect: rect_like, deg: float) -> Rect:
-    """Calculate the non-rotated rect version.
-
-    Args:
-        cropbox: the page's /CropBox
-        rect: rectangle
-        deg: the page's /Rotate value
-    Returns:
-        Rectangle in original (/CropBox) coordinates
-    """
-    while deg < 0:
-        deg += 360
-    while deg >= 360:
-        deg -= 360
-    if deg % 90 > 0:
-        deg = 0
-    if deg == 0:  # no rotation: no-op
-        return rect
-    points = []  # store the new rect points here
-    for p in rect.quad:  # run through the rect's quad points
-        if deg == 90:
-            q = (p.y, cropbox.height - p.x)
-        elif deg == 270:
-            q = (cropbox.width - p.y, p.x)
-        else:
-            q = (cropbox.width - p.x, cropbox.height - p.y)
-        points.append(q)
-
-    r = Rect(points[0], points[0])
-    for p in points[1:]:
-        r |= p
-    return r
-
-
 def get_highlight_selection(
     page, start: point_like = None, stop: point_like = None, clip: rect_like = None
 ) -> list:
@@ -2861,7 +2827,7 @@ def get_highlight_selection(
         stop = clip.br
     clip.y0 = start.y
     clip.y1 = stop.y
-    if clip.isEmpty or clip.isInfinite:
+    if clip.is_empty or clip.is_infinite:
         return []
 
     # extract text of page, clip only, no images, expand ligatures
@@ -2885,7 +2851,7 @@ def get_highlight_selection(
     bboxf = lines.pop(0)
     if bboxf.y0 - start.y <= 0.1 * bboxf.height:  # close enough?
         r = Rect(start.x, bboxf.y0, bboxf.br)  # intersection rectangle
-        if not (r.isEmpty or r.isInfinite):
+        if not (r.is_empty or r.is_infinite):
             lines.insert(0, r)  # insert again if not empty
     else:
         lines.insert(0, bboxf)  # insert again
@@ -2897,7 +2863,7 @@ def get_highlight_selection(
     bboxl = lines.pop()
     if stop.y - bboxl.y1 <= 0.1 * bboxl.height:  # close enough?
         r = Rect(bboxl.tl, stop.x, bboxl.y1)  # intersection rectangle
-        if not (r.isEmpty or r.isInfinite):
+        if not (r.is_empty or r.is_infinite):
             lines.append(r)  # append if not empty
     else:
         lines.append(bboxl)  # append again
@@ -2974,7 +2940,7 @@ def make_table(rect: rect_like = (0, 0, 1, 1), cols: int = 1, rows: int = 1) -> 
         PyMuPDF Rect objects of equal sizes.
     """
     rect = Rect(rect)  # ensure this is a Rect
-    if rect.isEmpty or rect.isInfinite:
+    if rect.is_empty or rect.is_infinite:
         raise ValueError("rect must be finite and not empty")
     tl = rect.tl
 
@@ -6610,7 +6576,7 @@ class Pixmap(object):
     def pil_save(self, *args, **kwargs):
         """Write to image file using Pillow.
 
-        Arguments are passed to Pillow's Image.save() method.
+        Args are passed to Pillow's Image.save method, see their documentation.
         Use instead of save when other output formats are desired.
         """
         try:
@@ -6639,8 +6605,8 @@ class Pixmap(object):
     def pil_tobytes(self, *args, **kwargs):
         """Convert to binary image stream using pillow.
 
-        Arguments are passed to Pillow's Image.save() method.
-        Use it instead of save when other output formats are needed.
+        Args are passed to Pillow's Image.save method, see their documentation.
+        Use instead of 'tobytes' when other output formats are needed.
         """
         from io import BytesIO
 
@@ -7203,9 +7169,9 @@ class Annot(object):
         dt = self.border["dashes"]  # get the dashes spec
         bwidth = self.border["width"]  # get border line width
         stroke = self.colors["stroke"]  # get the stroke color
-        if fill_color != None:
+        if fill_color != None:  # change of fill color requested
             fill = fill_color
-        else:
+        else:  # put in current annot value
             fill = self.colors["fill"]
 
         rect = None  # self.rect  # prevent MuPDF fiddling with it
@@ -7240,9 +7206,8 @@ class Annot(object):
             fill_color=fill,
             rotate=rotate,
         )
-        if not val:  # something went wrong, skip the rest
-            return val
-
+        if val == False:
+            raise ValueError("Error updating annotation.")
         bfill = color_string(fill, "f")
         bstroke = color_string(stroke, "s")
 
@@ -7892,7 +7857,7 @@ class TextPage(object):
         while i < items - 1:
             v1 = val[i]
             v2 = val[i + 1]
-            if v1.y1 != v2.y1 or (v1 & v2).isEmpty:
+            if v1.y1 != v2.y1 or (v1 & v2).is_empty:
                 i += 1
                 continue  # no overlap on same line
             val[i] = v1 | v2  # join rectangles
@@ -8231,7 +8196,7 @@ class TextWriter(object):
 
         if morph:
             p = morph[0] * self.ictm
-            delta = Matrix(1, 1).preTranslate(p.x, p.y)
+            delta = Matrix(1, 1).pretranslate(p.x, p.y)
             matrix = ~delta * morph[1] * delta
         if morph or matrix:
             new_cont_lines.append("%g %g %g %g %g %g cm" % JM_TUPLE(matrix))
