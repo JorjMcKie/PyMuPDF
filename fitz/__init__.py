@@ -162,16 +162,19 @@ def restore_aliases():
 
             setattr(fitz_class, old, deprecated_function)
         else:
-            setattr(fitz_class, old, fname)
+            if type(fname) is property:
+                setattr(fitz_class, old, property(fname.fget))
+            else:
+                setattr(fitz_class, old, fname)
 
         eigen = getattr(fitz_class, old)
         x = fname.__doc__
         if not x:
             x = ""
         try:
-            if callable(fname):
+            if callable(fname) or type(fname) is property:
                 eigen.__doc__ = (
-                    "*** Deprecated, will be removed in version following 1.19.0 - use '%s'. ***\n"
+                    "*** Deprecated and removed in version following 1.19.0 - use '%s'. ***\n"
                     % new
                     + x
                 )
