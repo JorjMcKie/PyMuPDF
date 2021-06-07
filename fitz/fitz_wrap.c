@@ -9420,6 +9420,12 @@ SWIGINTERN PyObject *Document_xref_set_key(struct Document *self,int xref,char c
             int i, n;
             fz_try(gctx) {
                 ASSERT_PDF(pdf);
+                if (!key) {
+                    THROWMSG(gctx, "bad 'key'");
+                }
+                if (!value) {
+                    THROWMSG(gctx, "bad 'value'");
+                }
                 int xreflen = pdf_xref_len(gctx, pdf);
                 if (!INRANGE(xref, 1, xreflen-1) && xref != -1)
                     THROWMSG(gctx, "bad xref");

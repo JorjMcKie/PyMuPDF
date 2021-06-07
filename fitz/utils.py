@@ -4889,11 +4889,12 @@ def subset_fonts(doc: Document) -> None:
 
     def set_old_widths(xref, widths):
         """Restore the old font width table in the subsetted font."""
+        if type(widths) is not str or not widths:
+            return None
         df = doc.xref_get_key(xref, "DescendantFonts")
         if df[0] != "array":  # we can only handle xref specifications
             return None
         df_xref = int(df[1][1:-1].replace("0 R", ""))
-
         doc.xref_set_key(df_xref, "W", widths)
         return None
 
