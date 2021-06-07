@@ -103,9 +103,9 @@ except ImportError:
 
 
 VersionFitz = "1.18.0"
-VersionBind = "1.18.14"
-VersionDate = "2021-06-01 08:11:38"
-version = (VersionBind, VersionFitz, "20210601081138")
+VersionBind = "1.18.15"
+VersionDate = "2021-06-07 11:05:35"
+version = (VersionBind, VersionFitz, "20210607110535")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -1630,7 +1630,9 @@ class Widget(object):
         return "'%s' widget on %s" % (self.field_type_string, str(self.parent))
 
     def __del__(self):
-        self._annot.__del__()
+        annot = getattr(self, "_annot")
+        if annot:
+            self._annot.__del__()
 
     @property
     def next(self):

@@ -5826,6 +5826,8 @@ JM_print_stext_page_as_text(fz_context *ctx, fz_output *out, fz_stext_page *page
     fz_stext_char *ch;
     fz_rect rect = page->mediabox;
     int last_char = 0;
+    char utf[10];
+    int i, n;
 
     for (block = page->first_block; block; block = block->next) {
         if (block->type == FZ_STEXT_BLOCK_TEXT) {
@@ -5835,10 +5837,15 @@ JM_print_stext_page_as_text(fz_context *ctx, fz_output *out, fz_stext_page *page
                     if (fz_is_infinite_rect(rect) ||
                         fz_contains_rect(rect, JM_char_bbox(ctx, line, ch))) {
                         last_char = ch->c;
-                        fz_write_rune(ctx, out, ch->c);
+                        n = fz_runetochar(utf, ch->c);
+                        for (i = 0; i < n; i++) {
+                            fz_write_byte(ctx, out, utf[i]);
+                        }
                     }
                 }
-                if (last_char != 10 && last_char) fz_write_string(ctx, out, "\n");
+                if (last_char != 10 && last_char > 0) {
+                    fz_write_string(ctx, out, "\n");
+                }
             }
         }
     }

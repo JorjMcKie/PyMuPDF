@@ -3,6 +3,7 @@ import json
 import math
 import os
 import string
+import random
 import typing
 import warnings
 
@@ -382,11 +383,11 @@ def search_for(*args, **kwargs) -> list:
     page, text = args
     quads = kwargs.get("quads", 0)
     clip = kwargs.get("clip")
-    flags = kwargs.get("flags", TEXT_DEHYPHENATE)
+    flags = kwargs.get(
+        "flags", TEXT_DEHYPHENATE | TEXT_PRESERVE_WHITESPACE | TEXT_PRESERVE_LIGATURES
+    )
 
     CheckParent(page)
-    if flags is None:
-        flags = TEXT_DEHYPHENATE
     tp = page.get_textpage(clip=clip, flags=flags)  # create TextPage
     rlist = tp.search(text, quads=quads)
     tp = None
@@ -400,7 +401,7 @@ def search_page_for(
     hit_max: int = 0,
     quads: bool = False,
     clip: rect_like = None,
-    flags: int = TEXT_DEHYPHENATE,
+    flags: int = TEXT_DEHYPHENATE | TEXT_PRESERVE_LIGATURES | TEXT_PRESERVE_WHITESPACE,
 ) -> list:
     """Search for a string on a page.
 
@@ -439,7 +440,9 @@ def get_text_blocks(
     """
     CheckParent(page)
     if flags is None:
-        flags = TEXT_PRESERVE_WHITESPACE + TEXT_PRESERVE_IMAGES
+        flags = (
+            TEXT_PRESERVE_WHITESPACE | TEXT_PRESERVE_IMAGES | TEXT_PRESERVE_LIGATURES
+        )
     tp = page.get_textpage(clip=clip, flags=flags)
     blocks = tp.extractBLOCKS()
     del tp
@@ -458,7 +461,7 @@ def get_text_words(
     """
     CheckParent(page)
     if flags is None:
-        flags = TEXT_PRESERVE_WHITESPACE
+        flags = TEXT_PRESERVE_WHITESPACE | TEXT_PRESERVE_LIGATURES
     tp = page.get_textpage(clip=clip, flags=flags)
     words = tp.extractWORDS()
     del tp
@@ -469,7 +472,7 @@ def get_textbox(
     page: Page,
     rect: rect_like,
 ) -> str:
-    rc = page.get_text("text", clip=rect, flags=0)
+    rc = page.get_text("text", clip=rect)
     if rc.endswith("\n"):
         rc = rc[:-1]
     return rc
@@ -599,9 +602,9 @@ def get_text(
     if option not in formats:
         option = "text"
     if flags is None:
-        flags = TEXT_PRESERVE_WHITESPACE
+        flags = TEXT_PRESERVE_WHITESPACE | TEXT_PRESERVE_LIGATURES
         if formats[option] == 1:
-            flags += TEXT_PRESERVE_IMAGES
+            flags |= TEXT_PRESERVE_IMAGES
 
     if option == "words":
         return get_text_words(page, clip=clip, flags=flags)
@@ -3106,7 +3109,7 @@ class Shape(object):
         if cnt < 4:
             raise ValueError("points too close")
         mb = rad / cnt  # revised breadth
-        matrix = TOOLS._hor_matrix(p1, p2)  # normalize line to x-axis
+        matrix = Matrix(TOOLS._hor_matrix(p1, p2))  # normalize line to x-axis
         i_mat = ~matrix  # get original position
         points = []  # stores edges
         for i in range(1, cnt):
@@ -4873,6 +4876,44 @@ def subset_fonts(doc: Document) -> None:
     # Maps fontnames to font xref -  "fontname" -> xref
     new_fontnames = {}
 
+    def get_old_widths(xref):
+        """Retrieve old font width table of the font."""
+        df = doc.xref_get_key(xref, "DescendantFonts")
+        if df[0] != "array":  # we can only handle xref specifications
+            return None
+        df_xref = int(df[1][1:-1].replace("0 R", ""))
+        widths = doc.xref_get_key(df_xref, "W")
+        if widths[0] != "array":  # no widths key found
+            return None
+        return widths[1]  # return the string
+
+    def set_old_widths(xref, widths):
+        """Restore the old font width table in the subsetted font."""
+        df = doc.xref_get_key(xref, "DescendantFonts")
+        if df[0] != "array":  # we can only handle xref specifications
+            return None
+        df_xref = int(df[1][1:-1].replace("0 R", ""))
+
+        doc.xref_set_key(df_xref, "W", widths)
+        return None
+
+    def set_subset_fontname(new_xref):
+        """Generate a name prefix to indicate a font subset."""
+        prefix = "".join(random.choices(tuple(string.ascii_uppercase), k=6)) + "+"
+        font_str = doc.xref_object(new_xref, compressed=True)
+        font_str = font_str.replace("/BaseFont/", "/BaseFont/" + prefix)
+        df = doc.xref_get_key(new_xref, "DescendantFonts")
+        if df[0] == "array":
+            df_xref = int(df[1][1:-1].replace("0 R", ""))
+            fd = doc.xref_get_key(df_xref, "FontDescriptor")
+            if fd[0] == "xref":
+                fd_xref = int(fd[1].replace("0 R", ""))
+                fd_str = doc.xref_object(fd_xref, compressed=True)
+                fd_str = fd_str.replace("/FontName/", "/FontName/" + prefix)
+                doc.update_object(fd_xref, fd_str)
+        doc.update_object(new_xref, font_str)
+        return None
+
     def build_subset(buffer, unc_set):
         """Build font subset using fontTools.
 
@@ -4910,6 +4951,8 @@ def subset_fonts(doc: Document) -> None:
                     "--unicodes-file=uncfile.txt",
                     "--output-file=newfont.ttf",
                     "--retain-gids",
+                    "--layout-features='*'",
+                    "--glyph-names",
                     "--passthrough-tables",
                 ]
             )
@@ -4918,7 +4961,13 @@ def subset_fonts(doc: Document) -> None:
             new_buffer = None
         try:
             os.remove("uncfile.txt")
+        except:
+            pass
+        try:
             os.remove("oldfont.ttf")
+        except:
+            pass
+        try:
             os.remove("newfont.ttf")
         except:
             pass
@@ -5051,14 +5100,22 @@ def subset_fonts(doc: Document) -> None:
 
     # walk through the original font xrefs and replace each by its subset def
     for font_xref, new_buffer in font_buffers.items():
+        width_table = get_old_widths(font_xref)
         val = doc._insert_font(fontbuffer=new_buffer)  # insert subset font
         new_xref = val[0]  # xref of subset font
+        set_subset_fontname(new_xref)
         font_str = doc.xref_object(  # get its object definition
             new_xref,
             compressed=True,
         )
         # ... and replace original font xref with it
+
         doc.update_object(font_xref, font_str)
+        if type(width_table) is not None:
+            set_old_widths(font_xref, width_table)
+        else:
+            name = doc.xref_get_key(font_xref, "BaseFont")[1]
+            print("Warning: could not repair character width table for '%s'." % name)
         # 'new_xref' remains unused in the PDF and will be removed
         # by garbage collection.
         new_fontsize += len(new_buffer)

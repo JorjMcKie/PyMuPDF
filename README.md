@@ -1,4 +1,4 @@
-# PyMuPDF 1.18.14
+# PyMuPDF 1.18.15
 
 ![logo](https://github.com/pymupdf/PyMuPDF/blob/master/demo/pymupdf.jpg)
 
@@ -15,7 +15,7 @@ On **[PyPI](https://pypi.org/project/PyMuPDF)** since August 2016: [![Downloads]
 
 # Introduction
 
-PyMuPDF (current version 1.18.14) is a Python binding with support for [MuPDF](https://mupdf.com/) (current version 1.18.*), a lightweight PDF, XPS, and E-book viewer, renderer, and toolkit, which is maintained and developed by Artifex Software, Inc.
+PyMuPDF (current version 1.18.15) is a Python binding with support for [MuPDF](https://mupdf.com/) (current version 1.18.*), a lightweight PDF, XPS, and E-book viewer, renderer, and toolkit, which is maintained and developed by Artifex Software, Inc.
 
 MuPDF can access files in PDF, XPS, OpenXPS, CBZ, EPUB and FB2 (e-books) formats, and it is known for its top performance and high rendering quality.
 
@@ -65,7 +65,7 @@ Our **documentation**, written using Sphinx, is available in various formats fro
 
 # Installation
 
-For Windows, Linux and Mac OSX platforms, there are wheels in the [download](https://pypi.org/project/PyMuPDF/#files) section of PyPI. This includes Python 64bit versions **3.6 through 3.9**. For Windows only, 32bit versions are available too. Since version 1.18.14 there also exist wheels for the Linux ARM architecture - look for platform tag ``manylinux2014_aarch64``.
+For Windows, Linux and Mac OSX platforms, there are wheels in the [download](https://pypi.org/project/PyMuPDF/#files) section of PyPI. This includes Python 64bit versions **3.6 through 3.9**. For Windows only, 32bit versions are available too. Since version 1.18.15 there also exist wheels for the Linux ARM architecture - look for platform tag ``manylinux2014_aarch64``.
 
 If your platform is not supported with one of our wheels, you need to generate PyMuPDF yourself as follows. This requires the development version of Python.
 
