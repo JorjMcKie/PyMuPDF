@@ -2324,7 +2324,7 @@ class linkDest(object):
     """link or outline destination details"""
 
     def __init__(self, obj, rlink):
-        isExt = obj.isExternal
+        isExt = obj.is_external
         isInt = not isExt
         self.dest = ""
         self.fileSpec = ""
@@ -2340,7 +2340,7 @@ class linkDest(object):
         self.uri = obj.uri
         if rlink and not self.uri.startswith("#"):
             self.uri = "#%i,%g,%g" % (rlink[0] + 1, rlink[1], rlink[2])
-        if obj.isExternal:
+        if obj.is_external:
             self.page = -1
             self.kind = LINK_URI
         if not self.uri:
@@ -2364,7 +2364,7 @@ class linkDest(object):
             else:
                 self.kind = LINK_NAMED
                 self.named = self.uri
-        if obj.isExternal:
+        if obj.is_external:
             if self.uri.startswith(("http://", "https://", "mailto:", "ftp://")):
                 self.isUri = True
                 self.kind = LINK_URI
@@ -2980,14 +2980,26 @@ def repair_mono_font(page: "Page", font: "Font") -> None:
     Notes:
         Some mono-spaced fonts are displayed with a too large character
         distance, e.g. "a b c" instead of "abc". This utility adds an entry
-        "/W[0 65535 w]" to the descendent font(s) of font. The float w is
-        taken to be the width of 0x20 (space).
+        "/DW w" to the descendent font of font. The int w is
+        taken to be the first width > 0 of the font's unicodes.
         This should enforce viewers to use 'w' as the character width.
 
     Args:
         page: fitz.Page object.
         font: fitz.Font object.
     """
+
+    def set_font_width(doc, xref, width):
+        df = doc.xref_get_key(xref, "DescendantFonts")
+        if df[0] != "array":
+            return False
+        df_xref = int(df[1][1:-1].replace("0 R", ""))
+        W = doc.xref_get_key(df_xref, "W")
+        if W[1] != "null":
+            doc.xref_set_key(df_xref, "W", "null")
+        doc.xref_set_key(df_xref, "DW", str(width))
+        return True
+
     if not font.flags["mono"]:  # font not flagged as monospaced
         return None
     doc = page.parent  # the document
@@ -3000,9 +3012,10 @@ def repair_mono_font(page: "Page", font: "Font") -> None:
     if xrefs == []:  # our font does not occur
         return
     xrefs = set(xrefs)  # drop any double counts
-    width = int(round((font.glyph_advance(32) * 1000)))
+    maxadv = max([font.glyph_advance(cp) for cp in font.valid_codepoints()[:3]])
+    width = int(round((maxadv * 1000)))
     for xref in xrefs:
-        if not TOOLS.set_font_width(doc, xref, width):
+        if not set_font_width(doc, xref, width):
             print("Cannot set width for '%s' in xref %i" % (font.name, xref))
 
 
@@ -5943,6 +5956,9 @@ class Page(object):
     def _getDrawings(self) -> AnyType:
         return _fitz.Page__getDrawings(self)
 
+    def _getTexttrace(self) -> AnyType:
+        return _fitz.Page__getTexttrace(self)
+
     def _apply_redactions(self, *args) -> AnyType:
         return _fitz.Page__apply_redactions(self, *args)
 
@@ -6865,8 +6881,8 @@ class Outline(object):
         return _fitz.Outline_down(self)
 
     @property
-    def isExternal(self) -> AnyType:
-        return _fitz.Outline_isExternal(self)
+    def is_external(self) -> AnyType:
+        return _fitz.Outline_is_external(self)
 
     @property
     def page(self) -> int:
@@ -6887,8 +6903,6 @@ class Outline(object):
     @property
     def is_open(self) -> AnyType:
         return _fitz.Outline_is_open(self)
-
-    isOpen = is_open
 
     @property
     def dest(self):
@@ -7429,22 +7443,55 @@ class Annot(object):
         self.set_rect(quad.rect)
         self.set_apn_matrix(apnmat * mat)
 
-    def set_colors(
-        self,
-        colors: AnyType = None,
-        fill: AnyType = None,
-        stroke: AnyType = None,
-    ) -> None:
-
+    def set_colors(self, colors=None, stroke=None, fill=None):
         """Set 'stroke' and 'fill' colors.
 
         Use either a dict or the direct arguments.
         """
         CheckParent(self)
+        doc = self.parent.parent
         if type(colors) is not dict:
             colors = {"fill": fill, "stroke": stroke}
+        fill = colors.get("fill")
+        stroke = colors.get("stroke")
+        fill_annots = (
+            PDF_ANNOT_CIRCLE,
+            PDF_ANNOT_SQUARE,
+            PDF_ANNOT_LINE,
+            PDF_ANNOT_POLY_LINE,
+            PDF_ANNOT_POLYGON,
+            PDF_ANNOT_REDACT,
+        )
+        if stroke in ([], ()):
+            doc.xref_set_key(self.xref, "C", "[]")
+        elif stroke is not None:
+            if hasattr(stroke, "__float__"):
+                stroke = [float(stroke)]
+            CheckColor(stroke)
+            if len(stroke) == 1:
+                s = "[%g]" % stroke[0]
+            elif len(stroke) == 3:
+                s = "[%g %g %g]" % tuple(stroke)
+            else:
+                s = "[%g %g %g %g]" % tuple(stroke)
+            doc.xref_set_key(self.xref, "C", s)
 
-        return _fitz.Annot_set_colors(self, colors, fill, stroke)
+        if self.type[0] not in fill_annots:
+            print("warning: annot type '%s' has no fill color" % self.type[0])
+            return
+        if fill in ([], ()):
+            doc.xref_set_key(self.xref, "IC", "[]")
+        elif fill is not None:
+            if hasattr(fill, "__float__"):
+                fill = [float(fill)]
+            CheckColor(fill)
+            if len(fill) == 1:
+                s = "[%g]" % fill[0]
+            elif len(fill) == 3:
+                s = "[%g %g %g]" % tuple(fill)
+            else:
+                s = "[%g %g %g %g]" % tuple(fill)
+            doc.xref_set_key(self.xref, "IC", s)
 
     @property
     def line_ends(self) -> AnyType:
@@ -7675,16 +7722,11 @@ class Link(object):
     def _colors(self, doc: "Document", xref: int) -> AnyType:
         return _fitz.Link__colors(self, doc, xref)
 
-    def _setColors(
-        self, colors: AnyType, doc: "Document", xref: int
-    ) -> AnyType:
-        return _fitz.Link__setColors(self, colors, doc, xref)
-
     @property
     def border(self):
         return self._border(self.parent.parent.this, self.xref)
 
-    def setBorder(self, border=None, width=0, dashes=None, style=None):
+    def set_border(self, border=None, width=0, dashes=None, style=None):
         if type(border) is not dict:
             border = {"width": width, "style": style, "dashes": dashes}
         return self._setBorder(border, self.parent.parent.this, self.xref)
@@ -7693,10 +7735,29 @@ class Link(object):
     def colors(self):
         return self._colors(self.parent.parent.this, self.xref)
 
-    def setColors(self, colors=None, stroke=None, fill=None):
+    def set_colors(self, colors=None, stroke=None, fill=None):
+        """Set border colors."""
+        CheckParent(self)
+        doc = self.parent.parent
         if type(colors) is not dict:
             colors = {"fill": fill, "stroke": stroke}
-        return self._setColors(colors, self.parent.parent.this, self.xref)
+        fill = colors.get("fill")
+        stroke = colors.get("stroke")
+        if fill is not None:
+            print("warning: links have no fill color")
+        if stroke in ([], ()):
+            doc.xref_set_key(self.xref, "C", "[]")
+            return
+        if hasattr(stroke, "__float__"):
+            stroke = [float(stroke)]
+        CheckColor(stroke)
+        if len(stroke) == 1:
+            s = "[%g]" % stroke[0]
+        elif len(stroke) == 3:
+            s = "[%g %g %g]" % tuple(stroke)
+        else:
+            s = "[%g %g %g %g]" % tuple(stroke)
+        doc.xref_set_key(self.xref, "C", s)
 
     @property
     def uri(self) -> AnyType:
@@ -7706,11 +7767,11 @@ class Link(object):
         return _fitz.Link_uri(self)
 
     @property
-    def isExternal(self) -> AnyType:
-        """External indicator."""
+    def is_external(self) -> AnyType:
+        """Flag the link as external."""
         CheckParent(self)
 
-        return _fitz.Link_isExternal(self)
+        return _fitz.Link_is_external(self)
 
     page = -1
 
@@ -7723,7 +7784,7 @@ class Link(object):
             raise ValueError("document closed or encrypted")
         doc = self.parent.parent
 
-        if self.isExternal or self.uri.startswith("#"):
+        if self.is_external or self.uri.startswith("#"):
             uri = None
         else:
             uri = doc.resolve_link(self.uri)
@@ -8233,6 +8294,12 @@ class TextWriter(object):
                 line = "/Alp%i gs" % alp
             elif line.endswith(" Tf"):
                 temp = line.split()
+                fsize = float(temp[1])
+                if render_mode != 0:
+                    w = fsize * 0.05
+                else:
+                    w = 1
+                new_cont_lines.append("%g w" % w)
                 font = int(temp[0][2:]) + max_font
                 line = " ".join(["/F%i" % font] + temp[1:])
             elif line.endswith(" rg"):
@@ -8709,11 +8776,6 @@ class Tools(object):
 
     def _point_in_quad(self, P: AnyType, Q: AnyType) -> AnyType:
         return _fitz.Tools__point_in_quad(self, P, Q)
-
-    def set_font_width(
-        self, doc: "Document", xref: int, width: int
-    ) -> AnyType:
-        return _fitz.Tools_set_font_width(self, doc, xref, width)
 
     def _le_annot_parms(self, annot, p1, p2, fill_color):
         """Get common parameters for making annot line end symbols.

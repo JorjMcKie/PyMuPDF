@@ -405,6 +405,11 @@ def restore_aliases():
     _alias(fitz.Matrix, "preTranslate", "pretranslate")
 
     # deprecated other aliases
+    _alias(fitz.Outline, "isExternal", "is_external")
+    _alias(fitz.Outline, "isOpen", "is_open")
+    _alias(fitz.Link, "isExternal", "is_external")
+    _alias(fitz.Link, "setBorder", "set_border")
+    _alias(fitz.Link, "setColors", "set_colors")
     _alias(fitz, "getPDFstr", "get_pdf_str")
     _alias(fitz, "getPDFnow", "get_pdf_now")
     _alias(fitz, "PaperSize", "paper_size")
@@ -413,6 +418,7 @@ def restore_aliases():
     _alias(fitz, "ImageProperties", "image_properties")
     _alias(fitz, "planishLine", "planish_line")
     _alias(fitz, "getTextLength", "get_text_length")
+    _alias(fitz, "getTextlength", "get_text_length")
 
 
 fitz.__doc__ = """

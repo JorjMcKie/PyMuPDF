@@ -3821,24 +3821,31 @@ PyObject *JM_fitz_config()
 //----------------------------------------------------------------------------
 void JM_color_FromSequence(PyObject *color, int *n, float col[4])
 {
-    if (!color || (!PySequence_Check(color) && !PyFloat_Check(color))) {
-        *n = 1;
+    if (!color || color == Py_None) {
+        *n = -1;
         return;
     }
     if (PyFloat_Check(color)) { // maybe just a single float
+        *n = 1;
         float c = (float) PyFloat_AsDouble(color);
         if (!INRANGE(c, 0, 1)) {
-            *n = 1;
-            return;
+            c = 1;
         }
         col[0] = c;
-        *n = 1;
         return;
     }
 
+    if (!PySequence_Check(color)) {
+        *n = -1;
+        return;
+    }
     int len = (int) PySequence_Size(color), rc;
+    if (len == 0) {
+        *n = 0;
+        return;
+    }
     if (!INRANGE(len, 1, 4) || len == 2) {
-        *n = 1;
+        *n = -1;
         return;
     }
 
@@ -4484,23 +4491,6 @@ JM_insert_font(fz_context *ctx, pdf_document *pdf, char *bfname, char *fontfile,
         weiter: ;
         font_obj = pdf_keep_obj(ctx, font_obj);
         ixref = pdf_to_num(ctx, font_obj);
-        if (fz_font_is_monospaced(ctx, font)) {
-            float adv = fz_advance_glyph(ctx, font,
-                            fz_encode_character(ctx, font, 32), 0);
-            int width = (int) floor(adv * 1000.0f + 0.5f);
-            pdf_obj *dfonts = pdf_dict_get(ctx, font_obj, PDF_NAME(DescendantFonts));
-            if (pdf_is_array(ctx, dfonts)) {
-                int i, n = pdf_array_len(ctx, dfonts);
-                for (i = 0; i < n; i++) {
-                    pdf_obj *dfont = pdf_array_get(ctx, dfonts, i);
-                    pdf_obj *warray = pdf_new_array(ctx, pdf, 3);
-                    pdf_array_push(ctx, warray, pdf_new_int(ctx, 0));
-                    pdf_array_push(ctx, warray, pdf_new_int(ctx, 65535));
-                    pdf_array_push(ctx, warray, pdf_new_int(ctx, (int64_t) width));
-                    pdf_dict_put_drop(ctx, dfont, PDF_NAME(W), warray);
-                }
-            }
-        }
         name = JM_EscapeStrFromStr(pdf_to_name(ctx,
                     pdf_dict_get(ctx, font_obj, PDF_NAME(BaseFont))));
 
@@ -5198,29 +5188,36 @@ PyObject *JM_annot_set_border(fz_context *ctx, PyObject *border, pdf_document *d
 PyObject *JM_annot_colors(fz_context *ctx, pdf_obj *annot_obj)
 {
     PyObject *res = PyDict_New();
-    PyObject *bc = PyList_New(0);        // stroke colors
-    PyObject *fc = PyList_New(0);        // fill colors
-    int i;
+    PyObject *color = NULL;
+    int i, n;
     float col;
-    pdf_obj *o = pdf_dict_get(ctx, annot_obj, PDF_NAME(C));
+    pdf_obj *o = NULL;
+    
+    o = pdf_dict_get(ctx, annot_obj, PDF_NAME(C));
     if (pdf_is_array(ctx, o)) {
-        int n = pdf_array_len(ctx, o);
+        n = pdf_array_len(ctx, o);
+        color = PyTuple_New((Py_ssize_t) n);
         for (i = 0; i < n; i++) {
             col = pdf_to_real(ctx, pdf_array_get(ctx, o, i));
-            LIST_APPEND_DROP(bc, Py_BuildValue("f", col));
+            PyTuple_SET_ITEM(color, i, Py_BuildValue("f", col));
         }
+        DICT_SETITEM_DROP(res, dictkey_stroke, color);
+    } else {
+        DICT_SETITEM_DROP(res, dictkey_stroke, Py_BuildValue("s", NULL));
     }
-    DICT_SETITEM_DROP(res, dictkey_stroke, bc);
 
-    o = pdf_dict_gets(ctx, annot_obj, "IC");
+    o = pdf_dict_get(ctx, annot_obj, PDF_NAME(IC));
     if (pdf_is_array(ctx, o)) {
-        int n = pdf_array_len(ctx, o);
+        n = pdf_array_len(ctx, o);
+        color = PyTuple_New((Py_ssize_t) n);
         for (i = 0; i < n; i++) {
             col = pdf_to_real(ctx, pdf_array_get(ctx, o, i));
-            LIST_APPEND_DROP(fc, Py_BuildValue("f", col));
+            PyTuple_SET_ITEM(color, i, Py_BuildValue("f", col));
         }
+        DICT_SETITEM_DROP(res, dictkey_fill, color);
+    } else {
+        DICT_SETITEM_DROP(res, dictkey_fill, Py_BuildValue("s", NULL));
     }
-    DICT_SETITEM_DROP(res, dictkey_fill, fc);
 
     return res;
 }
@@ -8693,9 +8690,7 @@ jm_tracedraw_path(fz_context *ctx, jm_tracedraw_device *dev, const fz_path *path
 }
 
 static void
-jm_tracedraw_fill_path(fz_context *ctx, fz_device *dev_, const fz_path *path,
-						int even_odd, fz_matrix ctm, fz_colorspace *colorspace,
-						const float *color, float alpha, fz_color_params color_params)
+jm_tracedraw_fill_path(fz_context *ctx, fz_device *dev_, const fz_path *path, int even_odd, fz_matrix ctm, fz_colorspace *colorspace, const float *color, float alpha, fz_color_params color_params)
 {
 	jm_tracedraw_device *dev = (jm_tracedraw_device *) dev_;
 	PyObject *out = dev->out;
@@ -8713,10 +8708,7 @@ jm_tracedraw_fill_path(fz_context *ctx, fz_device *dev_, const fz_path *path,
 }
 
 static void
-jm_tracedraw_stroke_path(fz_context *ctx, fz_device *dev_, const fz_path *path,
-						 const fz_stroke_state *stroke, fz_matrix ctm,
-						 fz_colorspace *colorspace, const float *color, float alpha,
-						 fz_color_params color_params)
+jm_tracedraw_stroke_path(fz_context *ctx, fz_device *dev_, const fz_path *path, const fz_stroke_state *stroke, fz_matrix ctm, fz_colorspace *colorspace, const float *color, float alpha, fz_color_params color_params)
 {
 	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
 	PyObject *out = dev->out;
@@ -8776,6 +8768,101 @@ jm_tracedraw_clip_stroke_path(fz_context *ctx, fz_device *dev_, const fz_path *p
 	LIST_APPEND_DROP(out, Py_BuildValue("s", "eclip-stroke"));
 }
 
+
+static void
+jm_trace_text_span(fz_context *ctx, PyObject *out, fz_text_span *span)
+{
+	int i;
+	char *fontname = fz_font_name(ctx, span->font);
+	PyObject *trm = Py_BuildValue("ffff", span->trm.a, span->trm.b, span->trm.c, span->trm.d);
+	PyObject *chars = PyTuple_New(span->len);
+	for (i = 0; i < span->len; i++)
+	{
+		float adv = 0;
+		if (span->items[i].gid >= 0) {
+			adv = fz_advance_glyph(ctx, span->font, span->items[i].gid, span->wmode);
+		}
+		PyTuple_SET_ITEM(chars, (Py_ssize_t) i, Py_BuildValue("iifff",
+			span->items[i].ucs, span->items[i].gid,
+			span->items[i].x, span->items[i].y, adv));
+	}
+	LIST_APPEND_DROP(out, Py_BuildValue("{s:s,s:i,s:i,s:O,s:O}",
+		"fontname", fontname,
+		"wmode", span->wmode,
+		"bidi", span->bidi_level,
+		"trm", trm,
+		"chars", chars));
+	Py_DECREF(trm);
+	Py_DECREF(chars);
+}
+
+static void
+jm_trace_text(fz_context *ctx, PyObject *out, const fz_text *text)
+{
+	fz_text_span *span;
+	for (span = text->head; span; span = span->next)
+		jm_trace_text_span(ctx, out, span);
+}
+
+
+static void
+jm_tracedraw_fill_text(fz_context *ctx, fz_device *dev_, const fz_text *text, fz_matrix ctm, fz_colorspace *colorspace, const float *color, float alpha, fz_color_params color_params)
+{
+	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
+	PyObject *out = dev->out;
+	LIST_APPEND_DROP(out, PyUnicode_FromString("fill_text"));
+	jm_tracedraw_color(ctx, out, colorspace, color, alpha);
+	jm_tracedraw_matrix(ctx, out, ctm);
+	jm_trace_text(ctx, out, text);
+	LIST_APPEND_DROP(out, PyUnicode_FromString("efill_text"));
+}
+
+static void
+jm_tracedraw_stroke_text(fz_context *ctx, fz_device *dev_, const fz_text *text, const fz_stroke_state *stroke, fz_matrix ctm, fz_colorspace *colorspace, const float *color, float alpha, fz_color_params color_params)
+{
+	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
+	PyObject *out = dev->out;
+	LIST_APPEND_DROP(out, PyUnicode_FromString("stroke_text"));
+	jm_tracedraw_color(ctx, out, colorspace, color, alpha);
+	jm_tracedraw_matrix(ctx, out, ctm);
+	jm_trace_text(ctx, out, text);
+	LIST_APPEND_DROP(out, PyUnicode_FromString("estroke_text"));
+}
+
+static void
+jm_tracedraw_clip_text(fz_context *ctx, fz_device *dev_, const fz_text *text, fz_matrix ctm, fz_rect scissor)
+{
+	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
+	PyObject *out = dev->out;
+	LIST_APPEND_DROP(out, PyUnicode_FromString("clip_text"));
+	jm_tracedraw_matrix(ctx, out, ctm);
+	jm_trace_text(ctx, out, text);
+	LIST_APPEND_DROP(out, PyUnicode_FromString("eclip_text"));
+}
+
+static void
+jm_tracedraw_clip_stroke_text(fz_context *ctx, fz_device *dev_, const fz_text *text, const fz_stroke_state *stroke, fz_matrix ctm, fz_rect scissor)
+{
+	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
+	PyObject *out = dev->out;
+	LIST_APPEND_DROP(out, PyUnicode_FromString("clip_stroke_text"));
+	jm_tracedraw_matrix(ctx, out, ctm);
+	jm_trace_text(ctx, out, text);
+	LIST_APPEND_DROP(out, PyUnicode_FromString("eclip_stroke_text"));
+}
+
+static void
+jm_tracedraw_ignore_text(fz_context *ctx, fz_device *dev_, const fz_text *text, fz_matrix ctm)
+{
+	jm_tracedraw_device *dev = (jm_tracedraw_device *)dev_;
+	PyObject *out = dev->out;
+	LIST_APPEND_DROP(out, PyUnicode_FromString("ignore_text"));
+	jm_tracedraw_matrix(ctx, out, ctm);
+	jm_trace_text(ctx, out, text);
+	LIST_APPEND_DROP(out, PyUnicode_FromString("eignore_text"));
+}
+
+
 fz_device *JM_new_tracedraw_device(fz_context *ctx, PyObject *out)
 {
 	jm_tracedraw_device *dev = fz_new_derived_device(ctx, jm_tracedraw_device);
@@ -8816,6 +8903,49 @@ fz_device *JM_new_tracedraw_device(fz_context *ctx, PyObject *out)
 
 	return (fz_device *)dev;
 }
+
+fz_device *JM_new_tracetext_device(fz_context *ctx, PyObject *out)
+{
+	jm_tracedraw_device *dev = fz_new_derived_device(ctx, jm_tracedraw_device);
+
+	dev->super.fill_path = NULL;
+	dev->super.stroke_path = NULL;
+	dev->super.clip_path = NULL;
+	dev->super.clip_stroke_path = NULL;
+
+	dev->super.fill_text = jm_tracedraw_fill_text;
+	dev->super.stroke_text = jm_tracedraw_stroke_text;
+	dev->super.clip_text = jm_tracedraw_clip_text;
+	dev->super.clip_stroke_text = jm_tracedraw_clip_stroke_text;
+	dev->super.ignore_text = jm_tracedraw_ignore_text;
+
+	dev->super.fill_shade = NULL;
+	dev->super.fill_image = NULL;
+	dev->super.fill_image_mask = NULL;
+	dev->super.clip_image_mask = NULL;
+
+	dev->super.pop_clip = NULL;
+
+	dev->super.begin_mask = NULL;
+	dev->super.end_mask = NULL;
+	dev->super.begin_group = NULL;
+	dev->super.end_group = NULL;
+
+	dev->super.begin_tile = NULL;
+	dev->super.end_tile = NULL;
+
+	dev->super.begin_layer = NULL;
+	dev->super.end_layer = NULL;
+
+	dev->super.render_flags = NULL;
+	dev->super.set_default_colorspaces = NULL;
+
+	dev->out = out;
+
+	return (fz_device *)dev;
+}
+
+
 
 
 SWIGINTERN void delete_Document(struct Document *self){
@@ -11841,8 +11971,7 @@ SWIGINTERN struct Annot *Page__add_redact_annot(struct Page *self,PyObject *quad
                 if (EXISTS(fill)) {
                     JM_color_FromSequence(fill, &nfcol, fcol);
                     pdf_obj *arr = pdf_new_array(gctx, page->doc, nfcol);
-                    for (i = 0; i < nfcol; i++)
-                    {
+                    for (i = 0; i < nfcol; i++) {
                         pdf_array_push_real(gctx, arr, fcol[i]);
                     }
                     pdf_dict_put_drop(gctx, annot->obj, PDF_NAME(IC), arr);
@@ -12132,7 +12261,7 @@ SWIGINTERN struct Annot *Page__add_freetext_annot(struct Page *self,PyObject *re
                 pdf_dict_put_int(gctx, annot->obj, PDF_NAME(Rotate), rotate);
                 pdf_dict_put_int(gctx, annot->obj, PDF_NAME(Q), align);
 
-                if (fill_color) {
+                if (nfcol > 0) {
                     pdf_set_annot_color(gctx, annot, nfcol, fcol);
                 }
 
@@ -12232,6 +12361,25 @@ SWIGINTERN PyObject *Page__getDrawings(struct Page *self){
             fz_try(gctx) {
                 rc = PyList_New(0);
                 dev = JM_new_tracedraw_device(gctx, rc);
+                fz_run_page(gctx, page, dev, fz_identity, NULL);
+                fz_close_device(gctx, dev);
+            }
+            fz_always(gctx) {
+                fz_drop_device(gctx, dev);
+            }
+            fz_catch(gctx) {
+                Py_CLEAR(rc);
+                return NULL;
+            }
+            return rc;
+        }
+SWIGINTERN PyObject *Page__getTexttrace(struct Page *self){
+            fz_page *page = (fz_page *) self;
+            fz_device *dev = NULL;
+            PyObject *rc = NULL;
+            fz_try(gctx) {
+                rc = PyList_New(0);
+                dev = JM_new_tracetext_device(gctx, rc);
                 fz_run_page(gctx, page, dev, fz_identity, NULL);
                 fz_close_device(gctx, dev);
             }
@@ -13442,7 +13590,7 @@ SWIGINTERN struct Outline *Outline_down(struct Outline *self){
             down_ol = fz_keep_outline(gctx, down_ol);
             return (struct Outline *) down_ol;
         }
-SWIGINTERN PyObject *Outline_isExternal(struct Outline *self){
+SWIGINTERN PyObject *Outline_is_external(struct Outline *self){
             fz_outline *ol = (fz_outline *) self;
             if (!ol->uri) Py_RETURN_FALSE;
             return JM_BOOL(fz_is_external_link(gctx, ol->uri));
@@ -13941,7 +14089,8 @@ SWIGINTERN PyObject *Annot__update_appearance(struct Annot *self,float opacity,c
                     && type != PDF_ANNOT_LINE
                     && type != PDF_ANNOT_POLY_LINE
                     && type != PDF_ANNOT_POLYGON
-                    || nfcol == 0 && fill_color != Py_None) {
+                    || nfcol == 0
+                    ) {
                     pdf_dict_del(gctx, annot->obj, PDF_NAME(IC));
                 } else if (nfcol > 0) {
                     pdf_set_annot_interior_color(gctx, annot, nfcol, fcol);
@@ -14023,47 +14172,6 @@ SWIGINTERN PyObject *Annot__update_appearance(struct Annot *self,float opacity,c
                 Py_RETURN_FALSE;
             }
             Py_RETURN_TRUE;
-        }
-SWIGINTERN void Annot_set_colors(struct Annot *self,PyObject *colors,PyObject *fill,PyObject *stroke){
-            if (!PyDict_Check(colors)) return;
-            pdf_annot *annot = (pdf_annot *) self;
-            int type = pdf_annot_type(gctx, annot);
-            PyObject *ccol, *icol;
-            ccol = PyDict_GetItem(colors, dictkey_stroke);
-            icol = PyDict_GetItem(colors, dictkey_fill);
-            int i, n;
-            float col[4];
-            n = 0;
-            if (EXISTS(ccol)) {
-                JM_color_FromSequence(ccol, &n, col);
-                fz_try(gctx) {
-                    pdf_set_annot_color(gctx, annot, n, col);
-                }
-                fz_catch(gctx) {
-                    JM_Warning("annot type has no stroke color");
-                }
-            } else if (ccol != Py_None) {
-                pdf_dict_del(gctx, annot->obj, PDF_NAME(C));
-            }
-            n = 0;
-            if (EXISTS(icol)) {
-                JM_color_FromSequence(icol, &n, col);
-                if (type != PDF_ANNOT_REDACT) {
-                    fz_try(gctx)
-                        pdf_set_annot_interior_color(gctx, annot, n, col);
-                    fz_catch(gctx)
-                        JM_Warning("annot type has no fill color");
-                } else {
-                    pdf_obj *arr = pdf_new_array(gctx, annot->page->doc, n);
-                    for (i = 0; i < n; i++) {
-                        pdf_array_push_real(gctx, arr, col[i]);
-                    }
-                    pdf_dict_put_drop(gctx, annot->obj, PDF_NAME(IC), arr);
-                }
-            } else if (icol != Py_None) {
-                pdf_dict_del(gctx, annot->obj, PDF_NAME(IC));
-            }
-            return;
         }
 SWIGINTERN PyObject *Annot_line_ends(struct Annot *self){
             pdf_annot *annot = (pdf_annot *) self;
@@ -14497,45 +14605,28 @@ SWIGINTERN PyObject *Link__setBorder(struct Link *self,PyObject *border,struct D
 SWIGINTERN PyObject *Link__colors(struct Link *self,struct Document *doc,int xref){
             pdf_document *pdf = pdf_specifics(gctx, (fz_document *) doc);
             if (!pdf) Py_RETURN_NONE;
-            pdf_obj *link_obj = pdf_new_indirect(gctx, pdf, xref, 0);
-            if (!link_obj) Py_RETURN_NONE;
-            PyObject *b = JM_annot_colors(gctx, link_obj);
-            pdf_drop_obj(gctx, link_obj);
-            return b;
-        }
-SWIGINTERN PyObject *Link__setColors(struct Link *self,PyObject *colors,struct Document *doc,int xref){
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *) doc);
-            pdf_obj *arr = NULL;
-            int i;
-            if (!pdf) Py_RETURN_NONE;
-            if (!PyDict_Check(colors)) Py_RETURN_NONE;
-            float scol[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            int nscol = 0;
-            float fcol[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-            int nfcol = 0;
-            PyObject *stroke = PyDict_GetItem(colors, dictkey_stroke);
-            PyObject *fill = PyDict_GetItem(colors, dictkey_fill);
-            JM_color_FromSequence(stroke, &nscol, scol);
-            JM_color_FromSequence(fill, &nfcol, fcol);
-            if (!nscol && !nfcol) Py_RETURN_NONE;
-            pdf_obj *link_obj = pdf_new_indirect(gctx, pdf, xref, 0);
-            if (!link_obj) Py_RETURN_NONE;
-            if (nscol > 0)
-            {
-                arr = pdf_new_array(gctx, pdf, nscol);
-                for (i = 0; i < nscol; i++)
-                    pdf_array_push_real(gctx, arr, scol[i]);
-                pdf_dict_put_drop(gctx, link_obj, PDF_NAME(C), arr);
+            PyObject *b = NULL;
+            pdf_obj *link_obj;
+            fz_try(gctx) {
+                link_obj = pdf_new_indirect(gctx, pdf, xref, 0);
+                if (!link_obj) {
+                    THROWMSG(gctx, "bad xref");
+                }
+                b = JM_annot_colors(gctx, link_obj);
             }
-            if (nfcol > 0) JM_Warning("this annot type has no fill color)");
-            pdf_drop_obj(gctx, link_obj);
-            Py_RETURN_NONE;
+            fz_always(gctx) {
+                pdf_drop_obj(gctx, link_obj);
+            }
+            fz_catch(gctx) {
+                return NULL;
+            }
+            return b;
         }
 SWIGINTERN PyObject *Link_uri(struct Link *self){
             fz_link *this_link = (fz_link *) self;
             return JM_UnicodeFromStr(this_link->uri);
         }
-SWIGINTERN PyObject *Link_isExternal(struct Link *self){
+SWIGINTERN PyObject *Link_is_external(struct Link *self){
             fz_link *this_link = (fz_link *) self;
             if (!this_link->uri) Py_RETURN_FALSE;
             return JM_BOOL(fz_is_external_link(gctx, this_link->uri));
@@ -14962,7 +15053,9 @@ SWIGINTERN PyObject *TextWriter_write_text(struct TextWriter *self,struct Page *
             fz_colorspace *colorspace;
             int ncol = 1;
             float dev_color[4] = {0, 0, 0, 0};
-            if (color) JM_color_FromSequence(color, &ncol, dev_color);
+            if (EXISTS(color)) {
+                JM_color_FromSequence(color, &ncol, dev_color);
+            }
             switch(ncol) {
                 case 3: colorspace = fz_device_rgb(gctx); break;
                 case 4: colorspace = fz_device_cmyk(gctx); break;
@@ -15485,33 +15578,6 @@ SWIGINTERN PyObject *Tools__point_in_quad(struct Tools *self,PyObject *P,PyObjec
             fz_point p = JM_point_from_py(P);
             fz_quad q = JM_quad_from_py(Q);
             return JM_BOOL(fz_is_point_inside_quad(p, q));
-        }
-SWIGINTERN PyObject *Tools_set_font_width(struct Tools *self,struct Document *doc,int xref,int width){
-            pdf_document *pdf = pdf_specifics(gctx, (fz_document *) doc);
-            if (!pdf) Py_RETURN_FALSE;
-            pdf_obj *font=NULL, *dfonts=NULL;
-            fz_try(gctx) {
-                font = pdf_load_object(gctx, pdf, xref);
-                dfonts = pdf_dict_get(gctx, font, PDF_NAME(DescendantFonts));
-                if (pdf_is_array(gctx, dfonts)) {
-                    int i, n = pdf_array_len(gctx, dfonts);
-                    for (i = 0; i < n; i++) {
-                        pdf_obj *dfont = pdf_array_get(gctx, dfonts, i);
-                        pdf_obj *warray = pdf_new_array(gctx, pdf, 3);
-                        pdf_array_push(gctx, warray, pdf_new_int(gctx, 0));
-                        pdf_array_push(gctx, warray, pdf_new_int(gctx, 65535));
-                        pdf_array_push(gctx, warray, pdf_new_int(gctx, (int64_t) width));
-                        pdf_dict_put_drop(gctx, dfont, PDF_NAME(W), warray);
-                    }
-                }
-            }
-            fz_always(gctx) {
-                pdf_drop_obj(gctx, font);
-            }
-            fz_catch(gctx) {
-                return NULL;
-            }
-            Py_RETURN_TRUE;
         }
 #ifdef __cplusplus
 extern "C" {
@@ -20404,6 +20470,34 @@ fail:
 }
 
 
+SWIGINTERN PyObject *_wrap_Page__getTexttrace(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+  PyObject *resultobj = 0;
+  struct Page *arg1 = (struct Page *) 0 ;
+  void *argp1 = 0 ;
+  int res1 = 0 ;
+  PyObject *swig_obj[1] ;
+  PyObject *result = 0 ;
+  
+  if (!args) SWIG_fail;
+  swig_obj[0] = args;
+  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Page, 0 |  0 );
+  if (!SWIG_IsOK(res1)) {
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Page__getTexttrace" "', argument " "1"" of type '" "struct Page *""'"); 
+  }
+  arg1 = (struct Page *)(argp1);
+  {
+    result = (PyObject *)Page__getTexttrace(arg1);
+    if (!result) {
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
+    }
+  }
+  resultobj = result;
+  return resultobj;
+fail:
+  return NULL;
+}
+
+
 SWIGINTERN PyObject *_wrap_Page__apply_redactions(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Page *arg1 = (struct Page *) 0 ;
@@ -23079,7 +23173,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Outline_isExternal(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Outline_is_external(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Outline *arg1 = (struct Outline *) 0 ;
   void *argp1 = 0 ;
@@ -23091,10 +23185,10 @@ SWIGINTERN PyObject *_wrap_Outline_isExternal(PyObject *SWIGUNUSEDPARM(self), Py
   swig_obj[0] = args;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Outline, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Outline_isExternal" "', argument " "1"" of type '" "struct Outline *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Outline_is_external" "', argument " "1"" of type '" "struct Outline *""'"); 
   }
   arg1 = (struct Outline *)(argp1);
-  result = (PyObject *)Outline_isExternal(arg1);
+  result = (PyObject *)Outline_is_external(arg1);
   resultobj = result;
   return resultobj;
 fail:
@@ -24136,39 +24230,6 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Annot_set_colors(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
-  PyObject *resultobj = 0;
-  struct Annot *arg1 = (struct Annot *) 0 ;
-  PyObject *arg2 = (PyObject *) NULL ;
-  PyObject *arg3 = (PyObject *) NULL ;
-  PyObject *arg4 = (PyObject *) NULL ;
-  void *argp1 = 0 ;
-  int res1 = 0 ;
-  PyObject *swig_obj[4] ;
-  
-  if (!SWIG_Python_UnpackTuple(args, "Annot_set_colors", 1, 4, swig_obj)) SWIG_fail;
-  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Annot, 0 |  0 );
-  if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Annot_set_colors" "', argument " "1"" of type '" "struct Annot *""'"); 
-  }
-  arg1 = (struct Annot *)(argp1);
-  if (swig_obj[1]) {
-    arg2 = swig_obj[1];
-  }
-  if (swig_obj[2]) {
-    arg3 = swig_obj[2];
-  }
-  if (swig_obj[3]) {
-    arg4 = swig_obj[3];
-  }
-  Annot_set_colors(arg1,arg2,arg3,arg4);
-  resultobj = SWIG_Py_Void();
-  return resultobj;
-fail:
-  return NULL;
-}
-
-
 SWIGINTERN PyObject *_wrap_Annot_line_ends(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Annot *arg1 = (struct Annot *) 0 ;
@@ -24981,47 +25042,12 @@ SWIGINTERN PyObject *_wrap_Link__colors(PyObject *SWIGUNUSEDPARM(self), PyObject
     SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Link__colors" "', argument " "3"" of type '" "int""'");
   } 
   arg3 = (int)(val3);
-  result = (PyObject *)Link__colors(arg1,arg2,arg3);
-  resultobj = result;
-  return resultobj;
-fail:
-  return NULL;
-}
-
-
-SWIGINTERN PyObject *_wrap_Link__setColors(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
-  PyObject *resultobj = 0;
-  struct Link *arg1 = (struct Link *) 0 ;
-  PyObject *arg2 = (PyObject *) 0 ;
-  struct Document *arg3 = (struct Document *) 0 ;
-  int arg4 ;
-  void *argp1 = 0 ;
-  int res1 = 0 ;
-  void *argp3 = 0 ;
-  int res3 = 0 ;
-  int val4 ;
-  int ecode4 = 0 ;
-  PyObject *swig_obj[4] ;
-  PyObject *result = 0 ;
-  
-  if (!SWIG_Python_UnpackTuple(args, "Link__setColors", 4, 4, swig_obj)) SWIG_fail;
-  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Link, 0 |  0 );
-  if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Link__setColors" "', argument " "1"" of type '" "struct Link *""'"); 
+  {
+    result = (PyObject *)Link__colors(arg1,arg2,arg3);
+    if (!result) {
+      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
+    }
   }
-  arg1 = (struct Link *)(argp1);
-  arg2 = swig_obj[1];
-  res3 = SWIG_ConvertPtr(swig_obj[2], &argp3,SWIGTYPE_p_Document, 0 |  0 );
-  if (!SWIG_IsOK(res3)) {
-    SWIG_exception_fail(SWIG_ArgError(res3), "in method '" "Link__setColors" "', argument " "3"" of type '" "struct Document *""'"); 
-  }
-  arg3 = (struct Document *)(argp3);
-  ecode4 = SWIG_AsVal_int(swig_obj[3], &val4);
-  if (!SWIG_IsOK(ecode4)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode4), "in method '" "Link__setColors" "', argument " "4"" of type '" "int""'");
-  } 
-  arg4 = (int)(val4);
-  result = (PyObject *)Link__setColors(arg1,arg2,arg3,arg4);
   resultobj = result;
   return resultobj;
 fail:
@@ -25052,7 +25078,7 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Link_isExternal(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
+SWIGINTERN PyObject *_wrap_Link_is_external(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Link *arg1 = (struct Link *) 0 ;
   void *argp1 = 0 ;
@@ -25064,10 +25090,10 @@ SWIGINTERN PyObject *_wrap_Link_isExternal(PyObject *SWIGUNUSEDPARM(self), PyObj
   swig_obj[0] = args;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Link, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Link_isExternal" "', argument " "1"" of type '" "struct Link *""'"); 
+    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Link_is_external" "', argument " "1"" of type '" "struct Link *""'"); 
   }
   arg1 = (struct Link *)(argp1);
-  result = (PyObject *)Link_isExternal(arg1);
+  result = (PyObject *)Link_is_external(arg1);
   resultobj = result;
   return resultobj;
 fail:
@@ -27891,57 +27917,6 @@ fail:
 }
 
 
-SWIGINTERN PyObject *_wrap_Tools_set_font_width(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
-  PyObject *resultobj = 0;
-  struct Tools *arg1 = (struct Tools *) 0 ;
-  struct Document *arg2 = (struct Document *) 0 ;
-  int arg3 ;
-  int arg4 ;
-  void *argp1 = 0 ;
-  int res1 = 0 ;
-  void *argp2 = 0 ;
-  int res2 = 0 ;
-  int val3 ;
-  int ecode3 = 0 ;
-  int val4 ;
-  int ecode4 = 0 ;
-  PyObject *swig_obj[4] ;
-  PyObject *result = 0 ;
-  
-  if (!SWIG_Python_UnpackTuple(args, "Tools_set_font_width", 4, 4, swig_obj)) SWIG_fail;
-  res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Tools, 0 |  0 );
-  if (!SWIG_IsOK(res1)) {
-    SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Tools_set_font_width" "', argument " "1"" of type '" "struct Tools *""'"); 
-  }
-  arg1 = (struct Tools *)(argp1);
-  res2 = SWIG_ConvertPtr(swig_obj[1], &argp2,SWIGTYPE_p_Document, 0 |  0 );
-  if (!SWIG_IsOK(res2)) {
-    SWIG_exception_fail(SWIG_ArgError(res2), "in method '" "Tools_set_font_width" "', argument " "2"" of type '" "struct Document *""'"); 
-  }
-  arg2 = (struct Document *)(argp2);
-  ecode3 = SWIG_AsVal_int(swig_obj[2], &val3);
-  if (!SWIG_IsOK(ecode3)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode3), "in method '" "Tools_set_font_width" "', argument " "3"" of type '" "int""'");
-  } 
-  arg3 = (int)(val3);
-  ecode4 = SWIG_AsVal_int(swig_obj[3], &val4);
-  if (!SWIG_IsOK(ecode4)) {
-    SWIG_exception_fail(SWIG_ArgError(ecode4), "in method '" "Tools_set_font_width" "', argument " "4"" of type '" "int""'");
-  } 
-  arg4 = (int)(val4);
-  {
-    result = (PyObject *)Tools_set_font_width(arg1,arg2,arg3,arg4);
-    if (!result) {
-      PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
-    }
-  }
-  resultobj = result;
-  return resultobj;
-fail:
-  return NULL;
-}
-
-
 SWIGINTERN PyObject *_wrap_new_Tools(PyObject *SWIGUNUSEDPARM(self), PyObject *args) {
   PyObject *resultobj = 0;
   struct Tools *result = 0 ;
@@ -28115,6 +28090,7 @@ static PyMethodDef SwigMethods[] = {
 	 { "Page__addWidget", _wrap_Page__addWidget, METH_VARARGS, NULL},
 	 { "Page_get_displaylist", _wrap_Page_get_displaylist, METH_VARARGS, NULL},
 	 { "Page__getDrawings", _wrap_Page__getDrawings, METH_O, NULL},
+	 { "Page__getTexttrace", _wrap_Page__getTexttrace, METH_O, NULL},
 	 { "Page__apply_redactions", _wrap_Page__apply_redactions, METH_VARARGS, NULL},
 	 { "Page__makePixmap", _wrap_Page__makePixmap, METH_VARARGS, NULL},
 	 { "Page_set_mediabox", _wrap_Page_set_mediabox, METH_VARARGS, NULL},
@@ -28183,7 +28159,7 @@ static PyMethodDef SwigMethods[] = {
 	 { "Outline_uri", _wrap_Outline_uri, METH_O, NULL},
 	 { "Outline_next", _wrap_Outline_next, METH_O, NULL},
 	 { "Outline_down", _wrap_Outline_down, METH_O, NULL},
-	 { "Outline_isExternal", _wrap_Outline_isExternal, METH_O, NULL},
+	 { "Outline_is_external", _wrap_Outline_is_external, METH_O, NULL},
 	 { "Outline_page", _wrap_Outline_page, METH_O, NULL},
 	 { "Outline_x", _wrap_Outline_x, METH_O, NULL},
 	 { "Outline_y", _wrap_Outline_y, METH_O, NULL},
@@ -28221,7 +28197,6 @@ static PyMethodDef SwigMethods[] = {
 	 { "Annot_vertices", _wrap_Annot_vertices, METH_O, NULL},
 	 { "Annot_colors", _wrap_Annot_colors, METH_O, NULL},
 	 { "Annot__update_appearance", _wrap_Annot__update_appearance, METH_VARARGS, NULL},
-	 { "Annot_set_colors", _wrap_Annot_set_colors, METH_VARARGS, NULL},
 	 { "Annot_line_ends", _wrap_Annot_line_ends, METH_O, NULL},
 	 { "Annot_set_line_ends", _wrap_Annot_set_line_ends, METH_VARARGS, NULL},
 	 { "Annot_type", _wrap_Annot_type, METH_O, NULL},
@@ -28246,9 +28221,8 @@ static PyMethodDef SwigMethods[] = {
 	 { "Link__border", _wrap_Link__border, METH_VARARGS, NULL},
 	 { "Link__setBorder", _wrap_Link__setBorder, METH_VARARGS, NULL},
 	 { "Link__colors", _wrap_Link__colors, METH_VARARGS, NULL},
-	 { "Link__setColors", _wrap_Link__setColors, METH_VARARGS, NULL},
 	 { "Link_uri", _wrap_Link_uri, METH_O, NULL},
-	 { "Link_isExternal", _wrap_Link_isExternal, METH_O, NULL},
+	 { "Link_is_external", _wrap_Link_is_external, METH_O, NULL},
 	 { "Link_rect", _wrap_Link_rect, METH_O, NULL},
 	 { "Link_next", _wrap_Link_next, METH_O, NULL},
 	 { "Link_swigregister", Link_swigregister, METH_O, NULL},
@@ -28342,7 +28316,6 @@ static PyMethodDef SwigMethods[] = {
 	 { "Tools__sine_between", _wrap_Tools__sine_between, METH_VARARGS, NULL},
 	 { "Tools__hor_matrix", _wrap_Tools__hor_matrix, METH_VARARGS, NULL},
 	 { "Tools__point_in_quad", _wrap_Tools__point_in_quad, METH_VARARGS, NULL},
-	 { "Tools_set_font_width", _wrap_Tools_set_font_width, METH_VARARGS, NULL},
 	 { "new_Tools", _wrap_new_Tools, METH_NOARGS, NULL},
 	 { "delete_Tools", _wrap_delete_Tools, METH_O, NULL},
 	 { "Tools_swigregister", Tools_swigregister, METH_O, NULL},
