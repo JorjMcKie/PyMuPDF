@@ -4867,14 +4867,12 @@ def subset_fonts(doc: Document) -> None:
     NOT rewritten and thus should retain properties like being hidden or
     controlled by optional content.
     """
-    # Used unicodes by font -  "fontname" -> unicode-list
-    font_subsets = {}
-
-    # Font subset binaries -  "font_xref" -> buffer
+    # Font binaries: -  "buffer" -> (names, xrefs, (unicodes, glyphs))
+    # An embedded font is uniquely defined by its fontbuffer only. It may have
+    # multiple names and xrefs.
+    # Once the sets of used unicodes and glyphs are known, we compute a
+    # smaller version of the buffer user package fontTools.
     font_buffers = {}
-
-    # Maps fontnames to font xref -  "fontname" -> xref
-    new_fontnames = {}
 
     def get_old_widths(xref):
         """Retrieve old font '/W' and '/DW' values."""
@@ -4919,12 +4917,13 @@ def subset_fonts(doc: Document) -> None:
         return None
 
     def set_subset_fontname(new_xref):
-        """Generate a name prefix to indicate a font subset.
+        """Generate a name prefix to tag a font as subset.
 
         We use a random generator to select 6 upper case ASCII characters.
         The prefixed name must be put in the font xref as the "/BaseFont" value
         and in the FontDescriptor object as the '/FontName' value.
         """
+        # The following generates a prefix like 'ABCDEF+'
         prefix = "".join(random.choices(tuple(string.ascii_uppercase), k=6)) + "+"
         font_str = doc.xref_object(new_xref, compressed=True)
         font_str = font_str.replace("/BaseFont/", "/BaseFont/" + prefix)
@@ -4940,12 +4939,12 @@ def subset_fonts(doc: Document) -> None:
         doc.update_object(new_xref, font_str)
         return None
 
-    def build_subset(buffer, unc_set):
+    def build_subset(buffer, unc_set, gid_set):
         """Build font subset using fontTools.
 
         Args:
             buffer: (bytes) the font given as a binary buffer.
-            unc_set: (set) required unicodes.
+            unc_set: (set) required glyph ids.
         Returns:
             Either None if subsetting is unsuccessful or the subset font buffer.
         """
@@ -4954,13 +4953,28 @@ def subset_fonts(doc: Document) -> None:
         except ImportError:
             print("This method requires fontTools to be installed.")
             raise
+        args = [
+            "oldfont.ttf",
+            "--retain-gids",
+            "--output-file=newfont.ttf",
+            "--layout-features='*'",
+            "--passthrough-tables",
+        ]
 
-        unc_list = list(unc_set)
-        unc_list.sort()
+        unc_file = open("uncfile.txt", "w")  # store glyph ids or unicodes as file
+        if 0xFFFD in unc_set:  # error unicode exists -> use glyphs
+            args.append("--gids-file=uncfile.txt")
+            gid_set.add(189)
+            unc_list = list(gid_set)
+            for unc in unc_list:
+                unc_file.write("%i\n" % unc)
+        else:
+            args.append("--unicodes-file=uncfile.txt")
+            unc_set.add(255)
+            unc_list = list(unc_set)
+            for unc in unc_list:
+                unc_file.write("%04x\n" % unc)
 
-        unc_file = open("uncfile.txt", "w")  # store unicodes as text file
-        for unc in unc_list:
-            unc_file.write("%i\n" % unc)
         unc_file.close()
         fontfile = open("oldfont.ttf", "wb")  # store fontbuffer as a file
         fontfile.write(buffer)
@@ -4970,16 +4984,7 @@ def subset_fonts(doc: Document) -> None:
         except:
             pass
         try:  # invoke fontTools subsetter
-            fts.main(
-                [
-                    "oldfont.ttf",
-                    "--gids-file=uncfile.txt",
-                    "--retain-gids",
-                    "--output-file=newfont.ttf",
-                    "--layout-features='*'",
-                    "--passthrough-tables",
-                ]
-            )
+            fts.main(args)
             new_buffer = open("newfont.ttf", "rb").read()  # subset binary
         except:
             new_buffer = None
@@ -4998,7 +5003,7 @@ def subset_fonts(doc: Document) -> None:
         return new_buffer
 
     def repl_fontnames(doc):
-        """Populate 'font_buffers' and 'new_fontnames'.
+        """Populate 'font_buffers'.
 
         For each font candidate, store its xref and the list of names
         by which PDF text may refer to it (there may be multiple).
@@ -5007,14 +5012,13 @@ def subset_fonts(doc: Document) -> None:
         def norm_name(name):
             """Recreate font name that contains PDF hex codes.
 
-            E.g. #20 -> space
+            E.g. #20 -> space, chr(32)
             """
             while "#" in name:
                 p = name.find("#")
                 c = int(name[p + 1 : p + 3], 16)
                 name = name.replace(name[p : p + 3], chr(c))
-            p = name.find("+") + 1
-            return name[p:]
+            return name
 
         def get_fontnames(doc, item):
             """Return a list of fontnames for an item of page.get_fonts().
@@ -5050,32 +5054,42 @@ def subset_fonts(doc: Document) -> None:
                 font_ext = f[1]  # font file extension
                 basename = f[3]  # font basename
 
-                if font_ext not in (  # supported by subsetting
+                if font_ext not in (  # supported by fontTools
                     "otf",
                     "ttf",
                     "woff",
                     "woff2",
                 ):
                     continue
-                # skip font subsets
+                # skip fonts which already are subsets
                 if len(basename) > 6 and basename[6] == "+":
                     continue
 
+                extr = doc.extract_font(font_xref)
+                fontbuffer = extr[-1]
                 names = get_fontnames(doc, f)
-                if font_xref not in font_buffers.keys():
-                    # store a new valid font buffer
-                    extr = doc.extract_font(font_xref)
-                    fontbuffer = extr[-1]
-                    font = Font(fontbuffer=fontbuffer)
-                    if font.name not in names:
-                        names.append(font.name)
-                    del font
-                    font_buffers[font_xref] = fontbuffer
-                for _fontname in names:
-                    # all fontname alternatives point to font xref
-                    new_fontnames[_fontname[:33]] = font_xref
+                name_set, xref_set, subsets = font_buffers.get(
+                    fontbuffer, (set(), set(), (set(), set()))
+                )
+                xref_set.add(font_xref)
+                for name in names:
+                    name_set.add(name)
+                font = fitz.Font(fontbuffer=fontbuffer)
+                name_set.add(font.name)
+                del font
+                font_buffers[fontbuffer] = (name_set, xref_set, subsets)
         return None
 
+    def find_buffer_by_name(name):
+        for buffer in font_buffers.keys():
+            name_set, _, _ = font_buffers[buffer]
+            if name in name_set:
+                return buffer
+        return None
+
+    # -----------------
+    # main function
+    # -----------------
     repl_fontnames(doc)  # populate font information
     if not font_buffers:  # nothing found to do
         print("No fonts to subset.")
@@ -5083,62 +5097,52 @@ def subset_fonts(doc: Document) -> None:
 
     old_fontsize = 0
     new_fontsize = 0
-    for fontbuffer in font_buffers.values():
+    for fontbuffer in font_buffers.keys():
         old_fontsize += len(fontbuffer)
-
-    extr_flags = TEXT_PRESERVE_LIGATURES | TEXT_PRESERVE_WHITESPACE
 
     # Scan page text for usage of subsettable fonts
     for page in doc:
-        # page fontlist must at least reference a candidate xref
-        if [
-            f[0] for f in page.get_fonts() if f[0] in font_buffers.keys()
-        ] == []:  # no relevant xref found
-            continue
-        # go through the text and extend set of used unicodes by font
+        # go through the text and extend set of used glyphs by font
+        # we use a modified MuPDF trace device, which delivers us glyph ids.
         for span in page._getTexttrace():
-            if type(span) is not dict:
+            if type(span) is not dict:  # skip useless information
                 continue
-            fontname = span["fontname"][:33]
-            if fontname not in new_fontnames.keys():
+            fontname = span["font"][:33]  # fontname for the span
+            buffer = find_buffer_by_name(fontname)
+            if buffer is None:
                 continue
-            subset = font_subsets.get(fontname, set())
+            name_set, xref_set, (set_ucs, set_gid) = font_buffers[buffer]
             for c in span["chars"]:
-                subset.add(c[1])  # add this glyph id
-            font_subsets[fontname] = subset
+                set_ucs.add(c[0])  # unicode
+                set_gid.add(c[1])  # glyph id
+            font_buffers[buffer] = (name_set, xref_set, (set_ucs, set_gid))
 
     # build the font subsets
-    for fontname in font_subsets.keys():
-        font_xref = new_fontnames[fontname]
-        old_buffer = font_buffers[font_xref]
-        new_buffer = build_subset(old_buffer, font_subsets[fontname])
-        if (
-            type(new_buffer) is bytes and new_buffer != font_buffers[font_xref]
-        ):  # subset was created and with a different binary
-            font_buffers[font_xref] = new_buffer
-            print("Subset built for '%s'." % fontname)
-        else:  # some error or no true subset - remove
-            del font_buffers[font_xref]
+    for old_buffer in font_buffers.keys():
+        name_set, xref_set, subsets = font_buffers[old_buffer]
+        new_buffer = build_subset(old_buffer, subsets[0], subsets[1])
+        fontname = list(name_set)[0]
+        if type(new_buffer) is None or len(new_buffer) >= len(old_buffer):
+            # subset was not created or did not get smaller
             print("Cannot subset '%s'." % fontname)
-        del old_buffer
-
-    # walk through the original font xrefs and replace each by its subset def
-    for font_xref, new_buffer in font_buffers.items():
-        # we need the original '/W' and '/DW' width values
-        width_table, def_width = get_old_widths(font_xref)
+            continue
+        print("Built subset of font '%s'." % fontname)
         val = doc._insert_font(fontbuffer=new_buffer)  # store subset font in PDF
-        new_xref = val[0]  # xref of subset font
-        set_subset_fontname(new_xref)  # mark subset font as such
+        new_xref = val[0]  # get its xref
+        set_subset_fontname(new_xref)  # tag fontname as subset font
         font_str = doc.xref_object(  # get its object definition
             new_xref,
             compressed=True,
         )
-
-        # ... and replace original font definition at xref with it
-        doc.update_object(font_xref, font_str)
-        # now restore old '/W' and '/DW' values
-        if width_table or def_width:
-            set_old_widths(font_xref, width_table, def_width)
+        # walk through the original font xrefs and replace each by the subset def
+        for font_xref in xref_set:
+            # we need the original '/W' and '/DW' width values
+            width_table, def_width = get_old_widths(font_xref)
+            # ... and replace original font definition at xref with it
+            doc.update_object(font_xref, font_str)
+            # now copy over old '/W' and '/DW' values
+            if width_table or def_width:
+                set_old_widths(font_xref, width_table, def_width)
         # 'new_xref' remains unused in the PDF and must be removed
         # by garbage collection.
         new_fontsize += len(new_buffer)

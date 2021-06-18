@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.15"
-VersionDate = "2021-06-07 11:05:35"
-version = (VersionBind, VersionFitz, "20210607110535")
+VersionDate = "2021-06-18 18:38:04"
+version = (VersionBind, VersionFitz, "20210618183804")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -1621,6 +1621,37 @@ class Widget(object):
 
         TOOLS._save_widget(self._annot, self)
         self._text_da = ""
+
+
+def button_states(self):
+    """Return the on/off state names for button widgets.
+
+    A button may have 'normal' or 'pressed down' appearances. While the 'Off'
+    state is usually called like this, the 'On' state is often given a name
+    relating to the functional context.
+    """
+    if self.field_type not in (1, 2, 3, 5):
+        return None  # no button type
+    doc = self.parent.parent
+    xref = self.xref
+    states = {"normal": None, "down": None}
+    APN = doc.xref_get_key(xref, "AP/N")
+    if APN[0] == "dict":
+        nstates = []
+        APN = APN[1][2:-2]
+        apnt = APN.split("/")[1:]
+        for x in apnt:
+            nstates.append(x.split()[0])
+        states["normal"] = nstates
+    APD = doc.xref_get_key(xref, "AP/D")
+    if APD[0] == "dict":
+        dstates = []
+        APD = APD[1][2:-2]
+        apdt = APD.split("/")[1:]
+        for x in apdt:
+            dstates.append(x.split()[0])
+        states["down"] = dstates
+    return states
 
     def reset(self):
         """Reset the field value to its default."""
