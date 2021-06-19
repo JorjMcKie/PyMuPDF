@@ -4033,7 +4033,8 @@ def fill_textbox(
     lineheight: OptFloat = None,
     align: int = 0,
     warn: bool = None,
-    right_to_left=False,
+    right_to_left: bool = False,
+    small_caps: bool = False,
 ) -> tuple:
     """Fill a rectangle with text.
 
@@ -4056,13 +4057,17 @@ def fill_textbox(
         font = Font("helv")
 
     def textlen(x):
-        return font.text_length(x, fontsize=fontsize)  # abbreviation
+        return font.text_length(
+            x, fontsize=fontsize, small_caps=small_caps
+        )  # abbreviation
 
     def char_lengths(x):
-        return font.char_lengths(x, fontsize=fontsize)
+        return font.char_lengths(x, fontsize=fontsize, small_caps=small_caps)
 
     def append_this(pos, text):
-        return writer.append(pos, text, font=font, fontsize=fontsize)
+        return writer.append(
+            pos, text, font=font, fontsize=fontsize, small_caps=small_caps
+        )
 
     tolerance = fontsize * 0.2  # extra distance to left border
     space_len = textlen(" ")
@@ -4214,7 +4219,11 @@ def fill_textbox(
         if i == 0:  # may have different start for first line
             start = pos
 
-        if align == TEXT_ALIGN_JUSTIFY and i not in no_justify and tl < std_width:
+        if (
+            align == TEXT_ALIGN_JUSTIFY
+            and i not in no_justify + [len(new_lines) - 1]
+            and tl < std_width
+        ):
             output_justify(start, line)
             start.x = std_start
             start.y += lh

@@ -8154,6 +8154,7 @@ class TextWriter(object):
         fontsize: float = 11,
         language: OptStr = None,
         right_to_left: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
 
         """Store 'text' at point 'pos' using 'font' and 'fontsize'."""
@@ -8169,7 +8170,7 @@ class TextWriter(object):
             right_to_left = 0
 
         val = _fitz.TextWriter_append(
-            self, pos, text, font, fontsize, language, right_to_left
+            self, pos, text, font, fontsize, language, right_to_left, small_caps
         )
 
         self.last_point = Point(val[-2:]) * self.ctm
@@ -8180,11 +8181,20 @@ class TextWriter(object):
 
         return val
 
-    def appendv(self, pos, text, font=None, fontsize=11, language=None):
+    def appendv(
+        self, pos, text, font=None, fontsize=11, language=None, small_caps=False
+    ):
         """Append text in vertical write mode."""
         lheight = fontsize * 1.2
         for c in text:
-            self.append(pos, c, font=font, fontsize=fontsize, language=language)
+            self.append(
+                pos,
+                c,
+                font=font,
+                fontsize=fontsize,
+                language=language,
+                small_caps=small_caps,
+            )
             pos.y += lheight
         return self.text_rect, self.last_point
 
@@ -8435,11 +8445,16 @@ class Font(object):
         )
 
     def glyph_advance(
-        self, chr: int, language: OptStr = None, script: int = 0, wmode: int = 0
+        self,
+        chr: int,
+        language: OptStr = None,
+        script: int = 0,
+        wmode: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
         """Return the glyph width of a unicode (font size 1)."""
 
-        return _fitz.Font_glyph_advance(self, chr, language, script, wmode)
+        return _fitz.Font_glyph_advance(self, chr, language, script, wmode, small_caps)
 
     def text_length(
         self,
@@ -8448,10 +8463,13 @@ class Font(object):
         language: OptStr = None,
         script: int = 0,
         wmode: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
         """Return length of unicode 'text' under a fontsize."""
 
-        return _fitz.Font_text_length(self, text, fontsize, language, script, wmode)
+        return _fitz.Font_text_length(
+            self, text, fontsize, language, script, wmode, small_caps
+        )
 
     def char_lengths(
         self,
@@ -8460,17 +8478,24 @@ class Font(object):
         language: OptStr = None,
         script: int = 0,
         wmode: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
         """Return tuple of char lengths of unicode 'text' under a fontsize."""
 
-        return _fitz.Font_char_lengths(self, text, fontsize, language, script, wmode)
+        return _fitz.Font_char_lengths(
+            self, text, fontsize, language, script, wmode, small_caps
+        )
 
     def glyph_bbox(
-        self, chr: int, language: OptStr = None, script: int = 0
+        self,
+        chr: int,
+        language: OptStr = None,
+        script: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
         """Return the glyph bbox of a unicode (font size 1)."""
 
-        val = _fitz.Font_glyph_bbox(self, chr, language, script)
+        val = _fitz.Font_glyph_bbox(self, chr, language, script, small_caps)
         val = Rect(val)
 
         return val
@@ -8481,10 +8506,11 @@ class Font(object):
         language: OptStr = None,
         script: int = 0,
         fallback: int = 0,
+        small_caps: int = 0,
     ) -> AnyType:
         """Check whether font has a glyph for this unicode."""
 
-        return _fitz.Font_has_glyph(self, chr, language, script, fallback)
+        return _fitz.Font_has_glyph(self, chr, language, script, fallback, small_caps)
 
     def valid_codepoints(self):
         from array import array

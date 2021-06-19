@@ -6251,6 +6251,38 @@ PyObject *JM_merge_resources(fz_context *ctx, pdf_page *page, pdf_obj *temp_res)
 
 
 //-----------------------------------------------------------------------------
+// version of fz_show_string, which covers SMALL CAPS
+//-----------------------------------------------------------------------------
+fz_matrix
+JM_show_string_cs(fz_context *ctx, fz_text *text, fz_font *user_font, fz_matrix trm, const char *s,
+	int wmode, int bidi_level, fz_bidi_direction markup_dir, fz_text_language language)
+{
+	fz_font *font=NULL;
+	int gid, ucs;
+	float adv;
+
+	while (*s)
+	{
+		s += fz_chartorune(&ucs, s);
+        gid = fz_encode_character_sc(ctx, user_font, ucs);
+        if (gid == 0) {
+		    gid = fz_encode_character_with_fallback(ctx, user_font, ucs, 0, language, &font);
+        } else {
+            font = user_font;
+        }
+		fz_show_glyph(ctx, text, font, trm, gid, ucs, wmode, bidi_level, markup_dir, language);
+		adv = fz_advance_glyph(ctx, font, gid, wmode);
+		if (wmode == 0)
+			trm = fz_pre_translate(trm, adv, 0);
+		else
+			trm = fz_pre_translate(trm, 0, -adv);
+	}
+
+	return trm;
+}
+
+
+//-----------------------------------------------------------------------------
 // version of fz_show_string, which also covers UCDN script
 //-----------------------------------------------------------------------------
 fz_matrix JM_show_string(fz_context *ctx, fz_text *text, fz_font *user_font, fz_matrix trm, const char *s, int wmode, int bidi_level, fz_bidi_direction markup_dir, fz_text_language language, int script)
@@ -15092,13 +15124,19 @@ SWIGINTERN struct TextWriter *new_TextWriter(PyObject *page_rect,float opacity,P
             }
             return (struct TextWriter *) text;
         }
-SWIGINTERN PyObject *TextWriter_append(struct TextWriter *self,PyObject *pos,char *text,struct Font *font,float fontsize,char *language,int right_to_left){
+SWIGINTERN PyObject *TextWriter_append(struct TextWriter *self,PyObject *pos,char *text,struct Font *font,float fontsize,char *language,int right_to_left,int small_caps){
             fz_text_language lang = fz_text_language_from_string(language);
             fz_point p = JM_point_from_py(pos);
             fz_matrix trm = fz_make_matrix(fontsize, 0, 0, fontsize, p.x, p.y);
             int markup_dir = 0, wmode = 0;
             fz_try(gctx) {
-                trm = fz_show_string(gctx, (fz_text *) self, (fz_font *) font, trm, text, wmode, right_to_left, markup_dir, lang);
+                if (small_caps == 0) {
+                    trm = fz_show_string(gctx, (fz_text *) self, (fz_font *) font,
+                                trm, text, wmode, right_to_left, markup_dir, lang);
+                } else {
+                    trm = JM_show_string_cs(gctx, (fz_text *) self, (fz_font *) font,
+                                trm, text, wmode, right_to_left, markup_dir, lang);
+                }
             }
             fz_catch(gctx) {
                 return NULL;
@@ -15175,16 +15213,23 @@ SWIGINTERN struct Font *new_Font(char *fontname,char *fontfile,PyObject *fontbuf
             }
             return (struct Font *) font;
         }
-SWIGINTERN PyObject *Font_glyph_advance(struct Font *self,int chr,char *language,int script,int wmode){
-            fz_font *font;
+SWIGINTERN PyObject *Font_glyph_advance(struct Font *self,int chr,char *language,int script,int wmode,int small_caps){
+            fz_font *font, *thisfont = (fz_font *) self;
+            int gid;
             fz_text_language lang = fz_text_language_from_string(language);
-            int gid = fz_encode_character_with_fallback(gctx, (fz_font *) self, chr, script, lang, &font);
+            if (small_caps) {
+                gid = fz_encode_character_sc(gctx, thisfont, chr);
+                if (gid >= 0) font = thisfont;
+            } else {
+                gid = fz_encode_character_with_fallback(gctx, thisfont, chr, script, lang, &font);
+            }
             return PyFloat_FromDouble((double) fz_advance_glyph(gctx, font, gid, wmode));
         }
-SWIGINTERN PyObject *Font_text_length(struct Font *self,PyObject *text,double fontsize,char *language,int script,int wmode){
+SWIGINTERN PyObject *Font_text_length(struct Font *self,PyObject *text,double fontsize,char *language,int script,int wmode,int small_caps){
             fz_font *font=NULL, *thisfont = (fz_font *) self;
             fz_text_language lang = fz_text_language_from_string(language);
             double rc = 0;
+            int gid;
             fz_try(gctx) {
                 if (!PyUnicode_Check(text) || PyUnicode_READY(text) != 0) {
                     THROWMSG(gctx, "bad type: text");
@@ -15194,7 +15239,12 @@ SWIGINTERN PyObject *Font_text_length(struct Font *self,PyObject *text,double fo
                 void *data = PyUnicode_DATA(text);
                 for (i = 0; i < len; i++) {
                     int c = PyUnicode_READ(kind, data, i);
-                    int gid = fz_encode_character_with_fallback(gctx,thisfont, c, script, lang, &font);
+                    if (small_caps) {
+                        gid = fz_encode_character_sc(gctx, thisfont, c);
+                        if (gid >= 0) font = thisfont;
+                    } else {
+                        gid = fz_encode_character_with_fallback(gctx,thisfont, c, script, lang, &font);
+                    }
                     rc += (double) fz_advance_glyph(gctx, font, gid, wmode);
                 }
             }
@@ -15205,10 +15255,11 @@ SWIGINTERN PyObject *Font_text_length(struct Font *self,PyObject *text,double fo
             rc *= fontsize;
             return PyFloat_FromDouble(rc);
         }
-SWIGINTERN PyObject *Font_char_lengths(struct Font *self,PyObject *text,double fontsize,char *language,int script,int wmode){
+SWIGINTERN PyObject *Font_char_lengths(struct Font *self,PyObject *text,double fontsize,char *language,int script,int wmode,int small_caps){
             fz_font *font, *thisfont = (fz_font *) self;
             fz_text_language lang = fz_text_language_from_string(language);
             PyObject *rc = NULL;
+            int gid;
             fz_try(gctx) {
                 if (!PyUnicode_Check(text) || PyUnicode_READY(text) != 0) {
                     THROWMSG(gctx, "bad type: text");
@@ -15219,7 +15270,12 @@ SWIGINTERN PyObject *Font_char_lengths(struct Font *self,PyObject *text,double f
                 rc = PyTuple_New(len);
                 for (i = 0; i < len; i++) {
                     int c = PyUnicode_READ(kind, data, i);
-                    int gid = fz_encode_character_with_fallback(gctx,thisfont, c, script, lang, &font);
+                    if (small_caps) {
+                        gid = fz_encode_character_sc(gctx, thisfont, c);
+                        if (gid >= 0) font = thisfont;
+                    } else {
+                        gid = fz_encode_character_with_fallback(gctx,thisfont, c, script, lang, &font);
+                    }
                     PyTuple_SET_ITEM(rc, i,
                         PyFloat_FromDouble(fontsize * (double) fz_advance_glyph(gctx, font, gid, wmode)));
                 }
@@ -15231,21 +15287,31 @@ SWIGINTERN PyObject *Font_char_lengths(struct Font *self,PyObject *text,double f
             }
             return rc;
         }
-SWIGINTERN PyObject *Font_glyph_bbox(struct Font *self,int chr,char *language,int script){
-            fz_font *font;
+SWIGINTERN PyObject *Font_glyph_bbox(struct Font *self,int chr,char *language,int script,int small_caps){
+            fz_font *font, *thisfont = (fz_font *) self;
+            int gid;
             fz_text_language lang = fz_text_language_from_string(language);
-            int gid = fz_encode_character_with_fallback(gctx, (fz_font *) self, chr, script, lang, &font);
+            if (small_caps) {
+                gid = fz_encode_character_sc(gctx, thisfont, chr);
+                if (gid >= 0) font = thisfont;
+            } else {
+                gid = fz_encode_character_with_fallback(gctx, thisfont, chr, script, lang, &font);
+            }
             return JM_py_from_rect(fz_bound_glyph(gctx, font, gid, fz_identity));
         }
-SWIGINTERN PyObject *Font_has_glyph(struct Font *self,int chr,char *language,int script,int fallback){
-            fz_font *font;
+SWIGINTERN PyObject *Font_has_glyph(struct Font *self,int chr,char *language,int script,int fallback,int small_caps){
+            fz_font *font, *thisfont = (fz_font *) self;
             fz_text_language lang;
             int gid = 0;
             if (fallback) {
                 lang = fz_text_language_from_string(language);
                 gid = fz_encode_character_with_fallback(gctx, (fz_font *) self, chr, script, lang, &font);
             } else {
-                gid = fz_encode_character(gctx, (fz_font *) self, chr);
+                if (!small_caps) {
+                    gid = fz_encode_character(gctx, thisfont, chr);
+                } else {
+                    gid = fz_encode_character_sc(gctx, thisfont, chr);
+                }
             }
             return Py_BuildValue("i", gid);
         }
@@ -25885,6 +25951,7 @@ SWIGINTERN PyObject *_wrap_TextWriter_append(PyObject *SWIGUNUSEDPARM(self), PyO
   float arg5 = (float) 11 ;
   char *arg6 = (char *) NULL ;
   int arg7 = (int) 0 ;
+  int arg8 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   int res3 ;
@@ -25899,10 +25966,12 @@ SWIGINTERN PyObject *_wrap_TextWriter_append(PyObject *SWIGUNUSEDPARM(self), PyO
   int alloc6 = 0 ;
   int val7 ;
   int ecode7 = 0 ;
-  PyObject *swig_obj[7] ;
+  int val8 ;
+  int ecode8 = 0 ;
+  PyObject *swig_obj[8] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "TextWriter_append", 3, 7, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "TextWriter_append", 3, 8, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_TextWriter, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "TextWriter_append" "', argument " "1"" of type '" "struct TextWriter *""'"); 
@@ -25942,8 +26011,15 @@ SWIGINTERN PyObject *_wrap_TextWriter_append(PyObject *SWIGUNUSEDPARM(self), PyO
     } 
     arg7 = (int)(val7);
   }
+  if (swig_obj[7]) {
+    ecode8 = SWIG_AsVal_int(swig_obj[7], &val8);
+    if (!SWIG_IsOK(ecode8)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode8), "in method '" "TextWriter_append" "', argument " "8"" of type '" "int""'");
+    } 
+    arg8 = (int)(val8);
+  }
   {
-    result = (PyObject *)TextWriter_append(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
+    result = (PyObject *)TextWriter_append(arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -26221,6 +26297,7 @@ SWIGINTERN PyObject *_wrap_Font_glyph_advance(PyObject *SWIGUNUSEDPARM(self), Py
   char *arg3 = (char *) NULL ;
   int arg4 = (int) 0 ;
   int arg5 = (int) 0 ;
+  int arg6 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   int val2 ;
@@ -26232,10 +26309,12 @@ SWIGINTERN PyObject *_wrap_Font_glyph_advance(PyObject *SWIGUNUSEDPARM(self), Py
   int ecode4 = 0 ;
   int val5 ;
   int ecode5 = 0 ;
-  PyObject *swig_obj[5] ;
+  int val6 ;
+  int ecode6 = 0 ;
+  PyObject *swig_obj[6] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Font_glyph_advance", 2, 5, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Font_glyph_advance", 2, 6, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Font, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Font_glyph_advance" "', argument " "1"" of type '" "struct Font *""'"); 
@@ -26267,7 +26346,14 @@ SWIGINTERN PyObject *_wrap_Font_glyph_advance(PyObject *SWIGUNUSEDPARM(self), Py
     } 
     arg5 = (int)(val5);
   }
-  result = (PyObject *)Font_glyph_advance(arg1,arg2,arg3,arg4,arg5);
+  if (swig_obj[5]) {
+    ecode6 = SWIG_AsVal_int(swig_obj[5], &val6);
+    if (!SWIG_IsOK(ecode6)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode6), "in method '" "Font_glyph_advance" "', argument " "6"" of type '" "int""'");
+    } 
+    arg6 = (int)(val6);
+  }
+  result = (PyObject *)Font_glyph_advance(arg1,arg2,arg3,arg4,arg5,arg6);
   resultobj = result;
   if (alloc3 == SWIG_NEWOBJ) free((char*)buf3);
   return resultobj;
@@ -26285,6 +26371,7 @@ SWIGINTERN PyObject *_wrap_Font_text_length(PyObject *SWIGUNUSEDPARM(self), PyOb
   char *arg4 = (char *) NULL ;
   int arg5 = (int) 0 ;
   int arg6 = (int) 0 ;
+  int arg7 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   double val3 ;
@@ -26296,10 +26383,12 @@ SWIGINTERN PyObject *_wrap_Font_text_length(PyObject *SWIGUNUSEDPARM(self), PyOb
   int ecode5 = 0 ;
   int val6 ;
   int ecode6 = 0 ;
-  PyObject *swig_obj[6] ;
+  int val7 ;
+  int ecode7 = 0 ;
+  PyObject *swig_obj[7] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Font_text_length", 2, 6, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Font_text_length", 2, 7, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Font, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Font_text_length" "', argument " "1"" of type '" "struct Font *""'"); 
@@ -26334,8 +26423,15 @@ SWIGINTERN PyObject *_wrap_Font_text_length(PyObject *SWIGUNUSEDPARM(self), PyOb
     } 
     arg6 = (int)(val6);
   }
+  if (swig_obj[6]) {
+    ecode7 = SWIG_AsVal_int(swig_obj[6], &val7);
+    if (!SWIG_IsOK(ecode7)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode7), "in method '" "Font_text_length" "', argument " "7"" of type '" "int""'");
+    } 
+    arg7 = (int)(val7);
+  }
   {
-    result = (PyObject *)Font_text_length(arg1,arg2,arg3,arg4,arg5,arg6);
+    result = (PyObject *)Font_text_length(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -26357,6 +26453,7 @@ SWIGINTERN PyObject *_wrap_Font_char_lengths(PyObject *SWIGUNUSEDPARM(self), PyO
   char *arg4 = (char *) NULL ;
   int arg5 = (int) 0 ;
   int arg6 = (int) 0 ;
+  int arg7 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   double val3 ;
@@ -26368,10 +26465,12 @@ SWIGINTERN PyObject *_wrap_Font_char_lengths(PyObject *SWIGUNUSEDPARM(self), PyO
   int ecode5 = 0 ;
   int val6 ;
   int ecode6 = 0 ;
-  PyObject *swig_obj[6] ;
+  int val7 ;
+  int ecode7 = 0 ;
+  PyObject *swig_obj[7] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Font_char_lengths", 2, 6, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Font_char_lengths", 2, 7, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Font, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Font_char_lengths" "', argument " "1"" of type '" "struct Font *""'"); 
@@ -26406,8 +26505,15 @@ SWIGINTERN PyObject *_wrap_Font_char_lengths(PyObject *SWIGUNUSEDPARM(self), PyO
     } 
     arg6 = (int)(val6);
   }
+  if (swig_obj[6]) {
+    ecode7 = SWIG_AsVal_int(swig_obj[6], &val7);
+    if (!SWIG_IsOK(ecode7)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode7), "in method '" "Font_char_lengths" "', argument " "7"" of type '" "int""'");
+    } 
+    arg7 = (int)(val7);
+  }
   {
-    result = (PyObject *)Font_char_lengths(arg1,arg2,arg3,arg4,arg5,arg6);
+    result = (PyObject *)Font_char_lengths(arg1,arg2,arg3,arg4,arg5,arg6,arg7);
     if (!result) {
       PyErr_SetString(PyExc_RuntimeError, fz_caught_message(gctx));return NULL;
     }
@@ -26427,6 +26533,7 @@ SWIGINTERN PyObject *_wrap_Font_glyph_bbox(PyObject *SWIGUNUSEDPARM(self), PyObj
   int arg2 ;
   char *arg3 = (char *) NULL ;
   int arg4 = (int) 0 ;
+  int arg5 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   int val2 ;
@@ -26436,10 +26543,12 @@ SWIGINTERN PyObject *_wrap_Font_glyph_bbox(PyObject *SWIGUNUSEDPARM(self), PyObj
   int alloc3 = 0 ;
   int val4 ;
   int ecode4 = 0 ;
-  PyObject *swig_obj[4] ;
+  int val5 ;
+  int ecode5 = 0 ;
+  PyObject *swig_obj[5] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Font_glyph_bbox", 2, 4, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Font_glyph_bbox", 2, 5, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Font, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Font_glyph_bbox" "', argument " "1"" of type '" "struct Font *""'"); 
@@ -26464,7 +26573,14 @@ SWIGINTERN PyObject *_wrap_Font_glyph_bbox(PyObject *SWIGUNUSEDPARM(self), PyObj
     } 
     arg4 = (int)(val4);
   }
-  result = (PyObject *)Font_glyph_bbox(arg1,arg2,arg3,arg4);
+  if (swig_obj[4]) {
+    ecode5 = SWIG_AsVal_int(swig_obj[4], &val5);
+    if (!SWIG_IsOK(ecode5)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode5), "in method '" "Font_glyph_bbox" "', argument " "5"" of type '" "int""'");
+    } 
+    arg5 = (int)(val5);
+  }
+  result = (PyObject *)Font_glyph_bbox(arg1,arg2,arg3,arg4,arg5);
   resultobj = result;
   if (alloc3 == SWIG_NEWOBJ) free((char*)buf3);
   return resultobj;
@@ -26481,6 +26597,7 @@ SWIGINTERN PyObject *_wrap_Font_has_glyph(PyObject *SWIGUNUSEDPARM(self), PyObje
   char *arg3 = (char *) NULL ;
   int arg4 = (int) 0 ;
   int arg5 = (int) 0 ;
+  int arg6 = (int) 0 ;
   void *argp1 = 0 ;
   int res1 = 0 ;
   int val2 ;
@@ -26492,10 +26609,12 @@ SWIGINTERN PyObject *_wrap_Font_has_glyph(PyObject *SWIGUNUSEDPARM(self), PyObje
   int ecode4 = 0 ;
   int val5 ;
   int ecode5 = 0 ;
-  PyObject *swig_obj[5] ;
+  int val6 ;
+  int ecode6 = 0 ;
+  PyObject *swig_obj[6] ;
   PyObject *result = 0 ;
   
-  if (!SWIG_Python_UnpackTuple(args, "Font_has_glyph", 2, 5, swig_obj)) SWIG_fail;
+  if (!SWIG_Python_UnpackTuple(args, "Font_has_glyph", 2, 6, swig_obj)) SWIG_fail;
   res1 = SWIG_ConvertPtr(swig_obj[0], &argp1,SWIGTYPE_p_Font, 0 |  0 );
   if (!SWIG_IsOK(res1)) {
     SWIG_exception_fail(SWIG_ArgError(res1), "in method '" "Font_has_glyph" "', argument " "1"" of type '" "struct Font *""'"); 
@@ -26527,7 +26646,14 @@ SWIGINTERN PyObject *_wrap_Font_has_glyph(PyObject *SWIGUNUSEDPARM(self), PyObje
     } 
     arg5 = (int)(val5);
   }
-  result = (PyObject *)Font_has_glyph(arg1,arg2,arg3,arg4,arg5);
+  if (swig_obj[5]) {
+    ecode6 = SWIG_AsVal_int(swig_obj[5], &val6);
+    if (!SWIG_IsOK(ecode6)) {
+      SWIG_exception_fail(SWIG_ArgError(ecode6), "in method '" "Font_has_glyph" "', argument " "6"" of type '" "int""'");
+    } 
+    arg6 = (int)(val6);
+  }
+  result = (PyObject *)Font_has_glyph(arg1,arg2,arg3,arg4,arg5,arg6);
   resultobj = result;
   if (alloc3 == SWIG_NEWOBJ) free((char*)buf3);
   return resultobj;
