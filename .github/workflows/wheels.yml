@@ -25,9 +25,9 @@ jobs:
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_ENVIRONMENT='CFLAGS="-fPIC -std=gnu99"'
-          CIBW_BEFORE_BUILD="cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .. && pip install --upgrade pip"
-          CIBW_SKIP="pp* cp27* cp35* *i686"
+          CIBW_ENVIRONMENT: "CFLAGS='-fPIC -std=gnu99'"
+          CIBW_BEFORE_BUILD: "cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .. && pip install --upgrade pip"
+          CIBW_SKIP: "pp* cp27* cp35* *i686"
 
       - uses: actions/upload-artifact@v2
         with:
