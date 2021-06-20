@@ -51,11 +51,11 @@ script:
 deploy:
   provider: pages
   token: $GITHUB_TOKEN
-  keep_history: false
+  keep_history: true
   skip_cleanup: true
   local_dir: wheelhouse
   repo: pymupdf/PyMuPDF-wheels
   target_branch: $TRAVIS_OS_NAME
   on:
-    repo: JorjMcKie/py-mupdf
+    branch: main
 
