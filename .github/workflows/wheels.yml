@@ -19,6 +19,9 @@ jobs:
       - name: Download MuPDF
         run: mkdir mupdf && wget -q 'https://mupdf.com/downloads/archive/mupdf-1.18.0-source.tar.gz' -O - | tar zx -C mupdf --strip-components=1
 
+      - name: Update MuPDF Source
+        run: cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
+
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.0.0a2
 
