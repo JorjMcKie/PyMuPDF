@@ -19,7 +19,7 @@ jobs:
       - name: Download MuPDF
         run: mkdir mupdf && wget -q 'https://mupdf.com/downloads/archive/mupdf-1.18.0-source.tar.gz' -O - | tar zx -C mupdf --strip-components=1
       - name: Build MuPDF
-        run: export CFLAGS="-fPIC" && cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd ..
+        run: export CFLAGS="-fPIC" && cd mupdf && sudo make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd ..
 
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.0.0a2
