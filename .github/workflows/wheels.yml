@@ -24,8 +24,7 @@ jobs:
         env:
           CIBW_ENVIRONMENT: "CFLAGS='-fPIC'"
           CIBW_SKIP: "pp* *i686"
-          CIBW_BEFORE_BUILD: "mkdir mupdf && wget -q 'https://mupdf.com/downloads/archive/mupdf-1.18.0-source.tar.gz' -O - | tar zx -C mupdf --strip-components=1 && cd mupdf && make HAVE_X11=no
-      HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .."
+          CIBW_BEFORE_ALL: "export CFLAGS='-fPIC' && mkdir mupdf && wget -q 'https://mupdf.com/downloads/archive/mupdf-1.18.0-source.tar.gz' -O - | tar zx -C mupdf --strip-components=1 && cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .."
 
       - uses: actions/upload-artifact@v2
         with:
