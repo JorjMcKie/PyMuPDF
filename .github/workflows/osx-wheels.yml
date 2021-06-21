@@ -18,6 +18,9 @@ jobs:
       - name: Update MuPDF Source
         run: cp fitz/_config.h mupdf/include/mupdf/fitz/config.h
 
+      - name: Build MuPDF
+        run: export CFLAGS='-fPIC' && cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd ..
+
       - name: Install cibuildwheel
         run: python -m pip install cibuildwheel==2.0.0a2
 
@@ -27,7 +30,6 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64 universal2
           CIBW_ENVIRONMENT: "CFLAGS='-fPIC'"
           CIBW_SKIP: "pp* *i686"
-          CIBW_BEFORE_ALL: "cd mupdf && make HAVE_X11=no HAVE_GLFW=no HAVE_GLUT=no prefix=/usr/local install && cd .."
 
       - uses: actions/upload-artifact@v2
         with:
