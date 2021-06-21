@@ -1,4 +1,4 @@
-name: Build
+name: Build wheels for Mac OSX
 
 on: workflow_dispatch
 
@@ -31,5 +31,5 @@ jobs:
 
       - uses: actions/upload-artifact@v2
         with:
-          name: osx-universal2-wheels
+          name: osx-wheels
           path: ./wheelhouse/*.whl

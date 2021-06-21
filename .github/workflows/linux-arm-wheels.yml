@@ -1,4 +1,4 @@
-name: Build
+name: Build wheels for Linux ARM
 
 on: workflow_dispatch
 

@@ -1,4 +1,4 @@
-name: Build
+name: Build Wheels for Linux 64bit
 
 on: workflow_dispatch
 
