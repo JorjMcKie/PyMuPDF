@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.15"
-VersionDate = "2021-06-18 18:38:04"
-version = (VersionBind, VersionFitz, "20210618183804")
+VersionDate = "2021-07-01 00:00:01"
+version = (VersionBind, VersionFitz, "20210701000001")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -395,6 +395,16 @@ UCDN_SCRIPT_ELYMAIC = _fitz.UCDN_SCRIPT_ELYMAIC
 UCDN_SCRIPT_NANDINAGARI = _fitz.UCDN_SCRIPT_NANDINAGARI
 UCDN_SCRIPT_NYIAKENG_PUACHUE_HMONG = _fitz.UCDN_SCRIPT_NYIAKENG_PUACHUE_HMONG
 UCDN_SCRIPT_WANCHO = _fitz.UCDN_SCRIPT_WANCHO
+
+
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
 
 
 class Matrix(object):
@@ -1622,36 +1632,35 @@ class Widget(object):
         TOOLS._save_widget(self._annot, self)
         self._text_da = ""
 
+    def button_states(self):
+        """Return the on/off state names for button widgets.
 
-def button_states(self):
-    """Return the on/off state names for button widgets.
-
-    A button may have 'normal' or 'pressed down' appearances. While the 'Off'
-    state is usually called like this, the 'On' state is often given a name
-    relating to the functional context.
-    """
-    if self.field_type not in (1, 2, 3, 5):
-        return None  # no button type
-    doc = self.parent.parent
-    xref = self.xref
-    states = {"normal": None, "down": None}
-    APN = doc.xref_get_key(xref, "AP/N")
-    if APN[0] == "dict":
-        nstates = []
-        APN = APN[1][2:-2]
-        apnt = APN.split("/")[1:]
-        for x in apnt:
-            nstates.append(x.split()[0])
-        states["normal"] = nstates
-    APD = doc.xref_get_key(xref, "AP/D")
-    if APD[0] == "dict":
-        dstates = []
-        APD = APD[1][2:-2]
-        apdt = APD.split("/")[1:]
-        for x in apdt:
-            dstates.append(x.split()[0])
-        states["down"] = dstates
-    return states
+        A button may have 'normal' or 'pressed down' appearances. While the 'Off'
+        state is usually called like this, the 'On' state is often given a name
+        relating to the functional context.
+        """
+        if self.field_type not in (1, 2, 3, 5):
+            return None  # no button type
+        doc = self.parent.parent
+        xref = self.xref
+        states = {"normal": None, "down": None}
+        APN = doc.xref_get_key(xref, "AP/N")
+        if APN[0] == "dict":
+            nstates = []
+            APN = APN[1][2:-2]
+            apnt = APN.split("/")[1:]
+            for x in apnt:
+                nstates.append(x.split()[0])
+            states["normal"] = nstates
+        APD = doc.xref_get_key(xref, "AP/D")
+        if APD[0] == "dict":
+            dstates = []
+            APD = APD[1][2:-2]
+            apdt = APD.split("/")[1:]
+            for x in apdt:
+                dstates.append(x.split()[0])
+            states["down"] = dstates
+        return states
 
     def reset(self):
         """Reset the field value to its default."""
@@ -1669,6 +1678,15 @@ def button_states(self):
     def next(self):
         return self._annot.next
 
+
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
 
 # ------------------------------------------------------------------------------
 # link kinds and link flags
@@ -2611,7 +2629,7 @@ def paper_rect(s: str) -> Rect:
 
 
 def CheckParent(o: typing.Any):
-    if not hasattr(o, "parent") or o.parent is None:
+    if getattr(o, "parent", None) == None:
         raise ValueError("orphaned object: parent is None")
 
 
@@ -5191,7 +5209,25 @@ class Document(object):
         return self
 
     def __exit__(self, *args):
-        self.close()
+        if hasattr(self, "_reset_page_refs"):
+            self._reset_page_refs()
+        if hasattr(self, "Graftmaps"):
+            for k in self.Graftmaps.keys():
+                self.Graftmaps[k] = None
+        if hasattr(self, "this") and self.thisown:
+            try:
+                self.__swig_destroy__(self)
+            except:
+                pass
+            self.thisown = False
+
+        self.Graftmaps = {}
+        self.ShownPages = {}
+        self.InsertedImages = {}
+        self.stream = None
+        self._reset_page_refs = DUMMY
+        self.__swig_destroy__ = DUMMY
+        self.is_closed = True
 
 
 # Register Document in _fitz:

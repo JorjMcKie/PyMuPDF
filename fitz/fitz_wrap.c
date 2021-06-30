@@ -2798,6 +2798,16 @@ struct DeviceWrapper {
 };
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //----------------------------------------------------------------------------
 // general
 //----------------------------------------------------------------------------
@@ -3262,7 +3272,16 @@ PyObject *dictkey_yres;
 
 
 
-
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //-----------------------------------------------------------------------------
 // Functions converting betwenn PySequences and fitz geometry objects
 //-----------------------------------------------------------------------------
@@ -3471,6 +3490,16 @@ JM_py_from_quad(fz_quad q)
 
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 fz_buffer *JM_object_to_buffer(fz_context *ctx, pdf_obj *val, int a, int b);
 PyObject *JM_EscapeStrFromBuffer(fz_context *ctx, fz_buffer *buff);
 pdf_obj *JM_pdf_obj_from_str(fz_context *ctx, pdf_document *doc, char *src);
@@ -4625,6 +4654,16 @@ struct fz_store
 
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //-----------------------------------------------------------------------------
 // pixmap helper functions
 //-----------------------------------------------------------------------------
@@ -4988,6 +5027,16 @@ JM_pixmap_from_page(fz_context *ctx,
 }
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //------------------------------------------------------------------------
 // return pdf_obj "border style" from Python str
 //------------------------------------------------------------------------
@@ -5436,7 +5485,16 @@ pdf_annot *JM_get_annot_by_xref(fz_context *ctx, pdf_page *page, int xref)
 
 
 
-
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 // Switch for computing glyph of fontsize height
 static int small_glyph_heights = 0;
 
@@ -6379,6 +6437,16 @@ fz_font *JM_get_font(fz_context *ctx,
 
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 #define SETATTR(a, v) PyObject_SetAttrString(Widget, a, v)
 #define GETATTR(a) PyObject_GetAttrString(Widget, a)
 #define CALLATTR(m, p) PyObject_CallMethod(Widget, m, p)
@@ -7207,6 +7275,16 @@ void JM_set_widget_properties(fz_context *ctx, pdf_annot *annot, PyObject *Widge
 #undef CALLATTR
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //-----------------------------------------------------------------------------
 // perform some cleaning if we have /EmbeddedFiles:
 // (1) remove any /Limits if /Names exists
@@ -7273,6 +7351,16 @@ pdf_obj *JM_embed_file(fz_context *ctx,
 }
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //----------------------------------------------------------------------------
 // Helpers for document page selection - main logic was imported
 // from pdf_clean_file.c. But instead of analyzing a string-based spec of
@@ -7655,6 +7743,16 @@ void remove_dest_range(fz_context *ctx, pdf_document *pdf, PyObject *numbers)
 }
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //-----------------------------------------------------------------------------
 // Read and concatenate a PDF page's /Conents object(s) in a buffer
 //-----------------------------------------------------------------------------
@@ -7865,7 +7963,16 @@ JM_image_reporter(fz_context *ctx, pdf_page *page)
 
 
 
-
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //------------------------------------------------------------------------
 // Store ID in PDF trailer
 //------------------------------------------------------------------------
@@ -8438,6 +8545,16 @@ void JM_scan_resources(fz_context *ctx, pdf_document *pdf, pdf_obj *rsrc,
 }
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 //-----------------------------------------------------------------------------
 // Convert any MuPDF document to a PDF
 // Returns bytes object containing the PDF, created via 'write' function.
@@ -8632,6 +8749,16 @@ JM_new_output_fileptr(fz_context *ctx, PyObject *bio)
 }
 
 
+/*
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
+*/
 typedef struct
 {
 	fz_device super;

@@ -1,3 +1,11 @@
+# ------------------------------------------------------------------------
+# Copyright 2020-2021, Harald Lieder, mailto:harald.lieder@outlook.com
+# License: GNU AFFERO GPL 3.0, https://www.gnu.org/licenses/agpl-3.0.html
+#
+# Part of "PyMuPDF", a Python binding for "MuPDF" (http://mupdf.com), a
+# lightweight PDF, XPS, and E-book viewer, renderer and toolkit which is
+# maintained and developed by Artifex Software, Inc. https://artifex.com.
+# ------------------------------------------------------------------------
 import io
 import json
 import math
@@ -4968,6 +4976,9 @@ def subset_fonts(doc: Document) -> None:
             "--output-file=newfont.ttf",
             "--layout-features='*'",
             "--passthrough-tables",
+            "--ignore-missing-glyphs",
+            "--ignore-missing-unicodes",
+            "--symbol-cmap",
         ]
 
         unc_file = open("uncfile.txt", "w")  # store glyph ids or unicodes as file
@@ -4994,7 +5005,10 @@ def subset_fonts(doc: Document) -> None:
             pass
         try:  # invoke fontTools subsetter
             fts.main(args)
-            new_buffer = open("newfont.ttf", "rb").read()  # subset binary
+            font = fitz.Font(fontfile="newfont.ttf")
+            new_buffer = font.buffer
+            if len(font.valid_codepoints()) == 0:
+                new_buffer = None
         except:
             new_buffer = None
         try:
@@ -5131,7 +5145,7 @@ def subset_fonts(doc: Document) -> None:
         name_set, xref_set, subsets = font_buffers[old_buffer]
         new_buffer = build_subset(old_buffer, subsets[0], subsets[1])
         fontname = list(name_set)[0]
-        if type(new_buffer) is None or len(new_buffer) >= len(old_buffer):
+        if new_buffer == None or len(new_buffer) >= len(old_buffer):
             # subset was not created or did not get smaller
             print("Cannot subset '%s'." % fontname)
             continue
