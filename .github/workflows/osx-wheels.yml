@@ -27,7 +27,6 @@ jobs:
       - name: Build wheels
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          #CIBW_ARCHS_MACOS: x86_64 universal2
           CIBW_ENVIRONMENT: "CFLAGS='-fPIC'"
           CIBW_SKIP: "pp* *i686"
 
