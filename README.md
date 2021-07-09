@@ -2,7 +2,7 @@
 
 ![logo](https://github.com/pymupdf/PyMuPDF/blob/master/demo/pymupdf.jpg)
 
-Release date: July 01, 2021
+Release date: July 10, 2021
 
 On **[PyPI](https://pypi.org/project/PyMuPDF)** since August 2016: [![Downloads](https://pepy.tech/badge/pymupdf)](https://pepy.tech/project/pymupdf)
 

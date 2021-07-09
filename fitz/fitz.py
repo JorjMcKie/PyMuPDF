@@ -104,8 +104,8 @@ except ImportError:
 
 VersionFitz = "1.18.0"
 VersionBind = "1.18.15"
-VersionDate = "2021-07-01 00:00:01"
-version = (VersionBind, VersionFitz, "20210701000001")
+VersionDate = "2021-07-10 00:00:01"
+version = (VersionBind, VersionFitz, "20210710000001")
 
 EPSILON = _fitz.EPSILON
 PDF_ANNOT_TEXT = _fitz.PDF_ANNOT_TEXT
@@ -5270,7 +5270,7 @@ class Page(object):
 
         inf_rect = Rect(1, 1, -1, -1)
         null_mat = Matrix()
-        if transform == 1:
+        if transform:
             rc = (inf_rect, null_mat)
         else:
             rc = inf_rect
@@ -5291,10 +5291,10 @@ class Page(object):
                 raise ValueError("found multiple images named '%s'." % name)
         xref = item[-1]
         if xref != 0:
-            # xobjs = [x for x in self.get_xobjects() if x[0] == xref and x[2] == 0]
-            # if xobjs == []:
-            #    raise ValueError("image in unsupported Form XObject")
-            return self.get_image_rects(item, transform=transform)[0]
+            try:
+                return self.get_image_rects(item, transform=transform)[0]
+            except:
+                return inf_rect
 
         val = _fitz.Page_get_image_bbox(self, name, transform)
 

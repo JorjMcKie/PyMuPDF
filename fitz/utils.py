@@ -545,7 +545,8 @@ def get_image_rects(page: Page, name, transform=False) -> list:
               item of the page's image list or an xref.
         transform: (bool) whether to also return the transformation matrix.
     Returns:
-        A list of Rect or tuples of (Rect, Matrix) for all image locations on the page.
+        A list of Rect objects or tuples of (Rect, Matrix) for all image
+        locations on the page.
     """
     if type(name) in (list, tuple):
         xref = name[0]
@@ -558,7 +559,7 @@ def get_image_rects(page: Page, name, transform=False) -> list:
         elif len(imglist) != 1:
             raise ValueError("multiple image names found")
         xref = imglist[0][0]
-    pix = Pixmap(page.parent, xref)
+    pix = Pixmap(page.parent, xref)  # make pixmap of the image to compute MD5
     digest = pix.digest
     del pix
     infos = page.get_image_info(hashes=True)
